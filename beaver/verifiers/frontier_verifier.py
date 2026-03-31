@@ -141,14 +141,21 @@ def _worker_process_instance(args):
         )
         non_violations = set(valid_indices) - set(violations)
 
-        total_violation_prob = np.sum(np.exp(np.array([previous_element.logprob + logprobs_dict[v] for v in violations]))).item()
+        total_violation_prob = np.sum(
+            np.exp(
+                np.array(
+                    [previous_element.logprob + logprobs_dict[v] for v in violations]
+                )
+            )
+        ).item()
 
         # Build new frontier elements
         new_elements = []
 
-        for idx in range(len(non_violations)):
-
+        for idx in range(len(valid_indices)):
             token_id = int(valid_indices[idx])
+            if token_id in violations:
+                continue
             new_tokens = previous_element.tokens + [token_id]
             new_elem = FrontierElement(
                 element_id=frontier.total_elements,
@@ -186,8 +193,6 @@ def _worker_process_instance(args):
 
     while transitions < _w.max_iterations:
 
-        # each step of frontier verification
-        #
         # pick the top incomplete element from the frontier
         start_step_time = time.time()
         element = frontier.pick_top_incomplete()
@@ -197,7 +202,9 @@ def _worker_process_instance(args):
             break
 
         model_generate_time = time.time()
-        model_logprobs, final_prompt = model_generate_next_token_logprobs(instance, element.tokens)
+        model_logprobs, final_prompt = model_generate_next_token_logprobs(
+            instance, element.tokens
+        )
         logprobs, reduced_logprobs = apply_top_p_top_k(model_logprobs)
 
         # Calculate pruned prob (from tokens that are not counted)
@@ -262,6 +269,7 @@ def _worker_process_instance(args):
             "complete_size": len(frontier._complete_leaves),
             "incomplete prob sum": incomplete_prob_sum,
             "complete prob sum": complete_prob_sum,
+            "violation prob sum": violation_prob_sum,
             "pruned prob sum": pruned_prob_sum,
             "upper_bound": upper_bound,
             "lower_bound": lower_bound,
@@ -286,7 +294,6 @@ def _worker_process_instance(args):
             print(json.dumps(running_results, indent=2))
             frontier.debug_frontier(_w.tokenizer)
 
-
         transitions += 1
 
         if pruned_prob_sum > 10 * _w.epsilon:
@@ -294,7 +301,7 @@ def _worker_process_instance(args):
                 f"Error: Pruned probability sum {pruned_prob_sum} exceeds reasonable threshold {10 * _w.epsilon} at transition {transitions}"
             )
 
-        if incomplete_prob_sum < _w.epsilon:
+        if upper_bound - lower_bound < _w.epsilon:
             if _w.verbose:
                 print(
                     f"Ending frontier analysis {instance['idx']} "
@@ -302,12 +309,11 @@ def _worker_process_instance(args):
                 )
             break
 
-
     instance_end_time = time.time()
     return {
         "idx": instance["idx"],
         **running_results,
-        "instance_run_time" : instance_end_time - instance_start_time,
+        "instance_run_time": instance_end_time - instance_start_time,
     }
 
 

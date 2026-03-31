@@ -86,12 +86,12 @@ def summarize_profile_data(run_logs_folder: Path):
         with open(summary_file, "w") as f:
             json.dump(summary, f, indent=4)
 
-        print("Average Timing Profiles over transitions (in seconds):")
-        print(json.dumps(avg_profiles, indent=4))
+        # print("Average Timing Profiles over transitions (in seconds):")
+        # print(json.dumps(avg_profiles, indent=4))
         print("Average Timing Profiles over tasks (in seconds):")
         print(json.dumps(file_avg_profiles, indent=4))
-        print("Max Timing Profiles over tasks (in seconds):")
-        print(json.dumps(file_max_profiles, indent=4))
+        # print("Max Timing Profiles over tasks (in seconds):")
+        # print(json.dumps(file_max_profiles, indent=4))
 
         return
 
@@ -116,36 +116,24 @@ def summarize_log_data(
     entries = [
         [e for e in entries if "transition" in e] for entries in all_data.values()
     ]
-    entries = [
-        e for e in entries if len(e) > 0
-    ]  # Filter out instances with no transitions]
-    transitions = [e[-1]["transition"] for e in entries]
+    entries_with_data = [e for e in entries if len(e) > 0]
+    num_no_data = num_instances - len(entries_with_data)
+    num_with_data = len(entries_with_data)
+
+    final_entries = [entry_list[-1] for entry_list in entries_with_data if entry_list]
 
     # Collect final values for each instance
-    final_incomplete = []
-    final_complete = []
-    final_ub = []
-    final_lb = []
-    final_ub_minus_lb = []
+    transitions = [e["transition"] for e in final_entries]
+    final_ub = [e.get("upper_bound", 1.0) for e in final_entries]
+    final_lb = [e.get("lower_bound", 0.0) for e in final_entries]
+    final_ub_minus_lb = [ub - lb for ub, lb in zip(final_ub, final_lb)]
 
-    for entry_list in entries:
-        if entry_list:
-            final_entry = entry_list[-1]
-            incomplete = final_entry.get("incomplete prob sum", 0.0)
-            complete = final_entry.get("complete prob sum", 0.0)
-
-            final_incomplete.append(incomplete)
-            final_complete.append(complete)
-            final_ub.append(incomplete + complete)  # UB = incomplete + complete
-            final_lb.append(complete)  # LB = complete
-            final_ub_minus_lb.append(incomplete)  # UB - LB = incomplete
-
-    # Calculate constraint satisfaction metrics
+    # Calculate constraint satisfaction metrics over instances WITH data
     num_satisfied = sum(1 for ub in final_ub if ub >= threshold)
     num_unsatisfied = sum(1 for ub in final_ub if ub < threshold)
-    pct_satisfied = (num_satisfied / num_instances * 100) if num_instances > 0 else 0.0
+    pct_satisfied = (num_satisfied / num_with_data * 100) if num_with_data > 0 else 0.0
     pct_unsatisfied = (
-        (num_unsatisfied / num_instances * 100) if num_instances > 0 else 0.0
+        (num_unsatisfied / num_with_data * 100) if num_with_data > 0 else 0.0
     )
 
     # Choose aggregation function
@@ -155,8 +143,8 @@ def summarize_log_data(
     # Create summary dictionary
     summary = {
         "num_instances": num_instances,
-        "avg_incomplete": float(agg_func(final_incomplete)),
-        "avg_complete": float(agg_func(final_complete)),
+        "num_instances_with_data": num_with_data,
+        "num_instances_no_data": num_no_data,
         "avg_transitions_to_completion": float(agg_func(transitions)),
         "avg_ub": float(agg_func(final_ub)),
         "avg_lb": float(agg_func(final_lb)),
@@ -172,26 +160,44 @@ def summarize_log_data(
 
     # Print summary
     print(f"\n{'=' * 50}")
-    print(f"Summary for {num_instances} instances")
+    print(f"Summary for {num_instances} instances ({num_no_data} had no transition data)")
     print(f"{'=' * 50}")
-    print(f"{metric_label} incomplete:              {summary['avg_incomplete']:.6f}")
-    print(f"{metric_label} complete:                {summary['avg_complete']:.6f}")
     print(
         f"{metric_label} transitions to completion: {summary['avg_transitions_to_completion']:.2f}"
     )
-    print(f"{metric_label} UB (incomplete + complete): {summary['avg_ub']:.6f}")
-    print(f"{metric_label} LB (complete):            {summary['avg_lb']:.6f}")
+    print(f"{metric_label} UB :                     {summary['avg_ub']:.6f}")
+    print(f"{metric_label} LB :                     {summary['avg_lb']:.6f}")
     print(f"{metric_label} UB-LB:                   {summary['avg_ub_minus_lb']:.6f}")
     print(f"Max transitions:             {summary['max_transitions']}")
     print(f"Min transitions:             {summary['min_transitions']}")
-    print(f"\nConstraint Satisfaction (threshold={threshold}):")
+    print(f"\nConstraint Satisfaction (threshold={threshold}, over {num_with_data} instances with data):")
     print(
         f"  Satisfied (UB >= {threshold}):     {num_satisfied} ({pct_satisfied:.1f}%)"
     )
     print(
         f"  Unsatisfied (UB < {threshold}):    {num_unsatisfied} ({pct_unsatisfied:.1f}%)"
     )
+    if num_no_data > 0:
+        print(
+            f"  No data (no transitions):  {num_no_data}"
+        )
     print(f"{'=' * 50}\n")
+
+    # Dev results
+    if final_ub:
+        print(f"Min UB: {min(final_ub):.6f}, Max UB: {max(final_ub):.6f}")
+        ub_idx = np.argsort(final_ub)
+        print(f"Min 10 UB instances: {ub_idx[:10]}")
+        print(f"Max 10 UB instances: {ub_idx[-10:]}")
+        print(f"Min LB: {min(final_lb):.6f}, Max LB: {max(final_lb):.6f}")
+        lb_idx = np.argsort(final_lb)
+        print(f"Min 10 LB instances: {lb_idx[:10]}")
+        print(f"Max 10 LB instances: {lb_idx[-10:]}")
+    if transitions:
+        print(f"Min Transitions: {min(transitions)}, Max Transitions: {max(transitions)}")
+        trans_idx = np.argsort(transitions)
+        print(f"Min 10 Transitions: {trans_idx[:10]}")
+        print(f"Max 10 Transitions: {trans_idx[-10:]}")
 
     # Save summary to JSON
     summary_path = run_logs_folder / "summary.json"

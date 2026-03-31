@@ -17,3 +17,4 @@ template_id: 1
 verifier: sampling
 gen_length: 32
 classifier_addr: "http://localhost:8083"
+max_iterations: 1000

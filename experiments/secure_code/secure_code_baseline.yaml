@@ -22,3 +22,4 @@ grammar: rust
 verifier: sampling
 max_iterations: 1000
 gen_length: 32
+use_chat_template: false

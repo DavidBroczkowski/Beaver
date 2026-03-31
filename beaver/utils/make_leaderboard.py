@@ -20,21 +20,35 @@ import csv
 import json
 from pathlib import Path
 
+from beaver.logging import get_log_data, summarize_log_data
+
 
 # Metrics to extract from each summary.json, in display order.
 # (json_key, display_name_template)
 #   {t} in the template is replaced with the threshold value.
 METRICS = [
     ("num_instances", "count"),
-    ("avg_incomplete", "avg_incomplete"),
-    ("avg_complete", "avg_complete"),
     ("avg_transitions_to_completion", "N"),
     ("avg_ub", "avg_UB"),
     ("avg_lb", "avg_LB"),
-    ("avg_ub_minus_lb", "avg_UB-LB"),
+    # ("avg_ub_minus_lb", "avg_UB-LB"),
+    # ("avg_pruned", "avg_pruned"),
+    # ("avg_violation_prob", "avg_viol_prob"),
+    # ("avg_max_frontier_size", "max_frontier"),
+    # ("avg_tokens_per_expansion", "tok/expand"),
     ("num_constraint_satisfied", "satisfied(>={t})"),
     ("num_constraint_unsatisfied", "unsatisfied(<{t})"),
 ]
+
+
+def _find_latest_logs_dir(exp_dir: Path) -> Path | None:
+    """Return the most recent logs_* directory under exp_dir."""
+    if not exp_dir.is_dir():
+        return None
+    for logs_dir in sorted(exp_dir.iterdir(), reverse=True):
+        if logs_dir.is_dir() and logs_dir.name.startswith("logs_"):
+            return logs_dir
+    return None
 
 
 def _find_latest_summary(exp_dir: Path) -> Path | None:
@@ -54,11 +68,44 @@ def _find_latest_summary(exp_dir: Path) -> Path | None:
     return None
 
 
+def _generate_all_summaries(results_dir: Path) -> None:
+    """Walk all model/experiment dirs and generate missing summary.json files."""
+    model_dirs = sorted(
+        [d for d in results_dir.iterdir() if d.is_dir()],
+        key=lambda d: d.name.lower(),
+    )
+    for model_dir in model_dirs:
+        for exp_dir in sorted(model_dir.iterdir()):
+            if not exp_dir.is_dir() or exp_dir.name.startswith("."):
+                continue
+            logs_dir = _find_latest_logs_dir(exp_dir)
+            if logs_dir is None:
+                continue
+            summary_path = logs_dir / "summary.json"
+            if summary_path.is_file():
+                print(f"  [skip] {summary_path} already exists")
+                continue
+            try:
+                all_data = get_log_data(logs_dir)
+                if all_data:
+                    summarize_log_data(all_data, logs_dir)
+                    print(f"  [generated] {summary_path}")
+                else:
+                    print(f"  [skip] No log data in {logs_dir}")
+            except Exception as e:
+                print(f"  [error] {logs_dir}: {e}")
+
+
 def _format_value(key: str, value) -> str:
     """Format a metric value for CSV output."""
     if value is None:
         return ""
-    if key in ("num_instances", "num_constraint_satisfied", "num_constraint_unsatisfied"):
+    if key in (
+        "num_instances",
+        "num_constraint_satisfied",
+        "num_constraint_unsatisfied",
+        "avg_max_frontier_size",
+    ):
         return str(int(value))
     if isinstance(value, float):
         return f"{value:.6f}"
@@ -144,7 +191,9 @@ def build_leaderboard(results_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build leaderboard CSV from batch results.")
+    parser = argparse.ArgumentParser(
+        description="Build leaderboard CSV from batch results."
+    )
     parser.add_argument(
         "results_dir",
         nargs="?",
@@ -152,15 +201,26 @@ def main():
         help="Root directory containing model result folders (default: ./logging/batch_results/model_leaderboard)",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         default=None,
         help="Output CSV path (default: {results_dir}/leaderboard.csv)",
+    )
+    parser.add_argument(
+        "--summarize",
+        action="store_true",
+        help="Generate missing summary.json files by running summarize_log_data on the latest log dirs before building the leaderboard.",
     )
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
     if not results_dir.is_dir():
         raise SystemExit(f"Results directory not found: {results_dir}")
+
+    if args.summarize:
+        print("Generating missing summaries ...")
+        _generate_all_summaries(results_dir)
+        print()
 
     output_path = Path(args.output) if args.output else results_dir / "leaderboard.csv"
 
@@ -226,7 +286,9 @@ def _build_ascii_report(
         for exp in exp_names:
             vals = exp_data.get(exp)
             if vals is None:
-                cells = " | ".join("-".ljust(metric_col_w[i]) for i in range(len(metric_names)))
+                cells = " | ".join(
+                    "-".ljust(metric_col_w[i]) for i in range(len(metric_names))
+                )
             else:
                 cells = " | ".join(
                     (vals.get(k) or "-").ljust(metric_col_w[i])
