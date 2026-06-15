@@ -86,34 +86,6 @@ def init_worker_state(config_dict):
         _w.frontier_topk = config_dict["frontier_topk"]
         _w.frontier_scoring_strategy = config_dict["frontier_scoring_strategy"]
 
-    # Persistent OpenAI client — reuses TCP connections across calls
-    from openai import OpenAI
-
-    _w.client = OpenAI(
-        base_url=f"{_w.server_addr}/v1",
-        api_key="dummy",
-        timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0),
-        # max_retries=0,  # We handle retries ourselves
-    )
-
-    # Resolve the model name actually registered on the server.
-    # vLLM may serve the model under a different ID (e.g. a local path or a
-    # shortened HuggingFace name) than what was requested.
-    try:
-        served_ids = [m.id for m in _w.client.models.list().data]
-        if served_ids and _w.model_name not in served_ids:
-            if len(served_ids) == 1:
-                _w.model_name = served_ids[0]
-            else:
-                # Pick the first model whose ID contains or is contained by the requested name
-                matched = [
-                    m for m in served_ids if _w.model_name in m or m in _w.model_name
-                ]
-                if matched:
-                    _w.model_name = matched[0]
-    except Exception:
-        pass  # Keep original; the API call will surface a clear 404 if still wrong
-
 
 # ---------------------------------------------------------------------------
 # Helper function to build prompt with optional chat template
@@ -213,6 +185,7 @@ def model_generate_next_token_logprobs(instance, continuation):
             if _w.verbose:
                 print(f"prompt: {prompt}")
 
+            # --- would have to replace this with the forward pass ------------------------------------
             response = _w.client.completions.create(
                 model=_w.model_name,
                 prompt=prompt,
@@ -224,7 +197,7 @@ def model_generate_next_token_logprobs(instance, continuation):
                     "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
-
+            
             # Extract logprobs from response
             logprobs_obj = response.choices[0].logprobs
             if (
@@ -270,7 +243,8 @@ def model_generate_next_token_logprobs(instance, continuation):
             _reset_client()
             time.sleep(delay)
 
-
+# This is only used for the sampling verification they did in the paper, which we will not use
+# therefore, we do not need to worry about this
 def model_sample_sequence(instance, max_tokens):
     """Sample a full sequence from vLLM server.
 
@@ -288,7 +262,8 @@ def model_sample_sequence(instance, max_tokens):
 
             if _w.verbose:
                 print(f"prompt: {prompt}")
-
+            
+            # --- would have to replace with sampling from the model -----------------------------
             response = _w.client.completions.create(
                 model=_w.model_name,
                 prompt=prompt,

@@ -82,6 +82,7 @@ def _enforce(instance, decoded_sequences, cache: SemanticConstraintCache, instan
 def _run_checks(instance, sequences, check_fn, timeout):
     results = []
     with ThreadPoolExecutor(max_workers=1) as executor:
+        # important, for each sequence, run the check function which returns a boolean value, True or False
         for seq in sequences:
             future = executor.submit(check_fn, instance, seq)
             try:

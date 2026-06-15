@@ -176,7 +176,7 @@ def load_batch_config(path: Path) -> dict[str, Any]:
 
 # ── server management ─────────────────────────────────────────────────────
 
-
+# Might have to alter this area of code so that we can use a model not on HuggingFace
 def ensure_model_downloaded(model_id: str) -> None:
     _log(f"Ensuring model is downloaded: {model_id}")
     try:

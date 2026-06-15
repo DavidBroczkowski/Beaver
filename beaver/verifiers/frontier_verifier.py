@@ -112,8 +112,9 @@ def _worker_process_instance(args):
 
         presemantic_check_time = time.time()
 
-        # Semantic checking
+        # Semantic checking -- this is the important lines!
         semantic_check_mask = np.logical_or(
+            # aka check_call_fn
             check_semantic_call(
                 _w.dataset_name, instance, decoded_sequences, token_lists
             ),
@@ -124,6 +125,7 @@ def _worker_process_instance(args):
         semantic_correct_indices = np.array([], dtype=np.intp)
         if len(semantic_check_indices) > 0:
             sequences_to_check = decoded_sequences[semantic_check_indices]
+            # aka check_fn!
             semantic_correctness_mask = enforce_semantic_constraint(
                 _w.dataset_name, instance, sequences_to_check, use_cache=_w.use_cache
             )
@@ -202,9 +204,14 @@ def _worker_process_instance(args):
             break
 
         model_generate_time = time.time()
+
+        # --- here, we generate the probabilities of the model , i.e., forward() --------------------------------
+        # have to change this
         model_logprobs, final_prompt = model_generate_next_token_logprobs(
             instance, element.tokens
         )
+
+        # apply top-p and top-k, no need to change this here
         logprobs, reduced_logprobs = apply_top_p_top_k(model_logprobs)
 
         # Calculate pruned prob (from tokens that are not counted)
@@ -296,6 +303,8 @@ def _worker_process_instance(args):
 
         transitions += 1
 
+        # this is a little interesting. In the paper they said if it got above epsilon it flagged
+        # but here it is 10 times epsilon? Maybe I am getting something confused?
         if pruned_prob_sum > 10 * _w.epsilon:
             raise RuntimeError(
                 f"Error: Pruned probability sum {pruned_prob_sum} exceeds reasonable threshold {10 * _w.epsilon} at transition {transitions}"
