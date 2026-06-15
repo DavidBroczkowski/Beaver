@@ -41,7 +41,7 @@ def init_worker_state(config_dict):
     from llguidance.hf import from_tokenizer
     from transformers import AutoTokenizer
 
-    _w.model_name = config_dict["model_name"]  # Store model name for API calls
+    _w.model_namex = config_dict["model_name"]  # Store model (parent nn.Module)
     _w.tokenizer = AutoTokenizer.from_pretrained(config_dict["model_name"])
     _w.lltokenizer = from_tokenizer(_w.tokenizer)
     _w.vocab_size = len(_w.tokenizer)  # Store total vocab size including special tokens
@@ -164,7 +164,7 @@ def _reset_client():
         # max_retries=0,
     )
 
-
+# key function to change
 def model_generate_next_token_logprobs(instance, continuation):
     """Get next-token logprobs from vLLM server using OpenAI-compatible API.
 
@@ -185,18 +185,26 @@ def model_generate_next_token_logprobs(instance, continuation):
             if _w.verbose:
                 print(f"prompt: {prompt}")
 
+            # --- encode prompt into tokens -----------------------------------------------------------
+            
+            emb_prompt = get_glove_embeddings(prompt.lower().split(" "))
+
             # --- would have to replace this with the forward pass ------------------------------------
-            response = _w.client.completions.create(
-                model=_w.model_name,
-                prompt=prompt,
-                max_tokens=1,
-                temperature=_w.temperature,
-                logprobs=min(_w.num_logprobs, _w.vocab_size),
-                stop=[],
-                extra_body={
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
+
+            # response = _w.client.completions.create(
+            #     model=_w.model_name,
+            #     prompt=prompt,
+            #     max_tokens=1,
+            #     temperature=_w.temperature,
+            #     logprobs=min(_w.num_logprobs, _w.vocab_size),
+            #     stop=[],
+            #     extra_body={
+            #         "chat_template_kwargs": {"enable_thinking": False},
+            #     },
+            # )
+            model = _w.model_name
+            logits = model.forward(emb_prompt)
+            probs = torch.softmax(logits)
             
             # Extract logprobs from response
             logprobs_obj = response.choices[0].logprobs
@@ -442,6 +450,64 @@ def log_profiling(profiling_data, profile_log_file):
     log_json(profiling_data, profile_log_file)
     if _w.verbose:
         print(profiling_data)
+
+# ---------------------------------------------------------------------------
+# LocalGlove - a class to hold the Glove embedding vectors, from TransformerPrograms Friedman et al.
+# ---------------------------------------------------------------------------
+
+class LocalGlove:
+    def __init__(self, fn, idx_w=None):
+        rows = []
+        self.key_to_index = {}
+        need = set(idx_w) if idx_w is not None else None
+        with open(fn, "r", encoding='utf-8') as f:
+            for line in f:
+                i = line.find(" ")
+                w = line[:i]
+                if (not need) or w in need:
+                    parts = line.strip().split(" ")
+                    self.key_to_index[parts[0]] = len(rows)
+                    rows.append(np.array([float(v) for v in parts[1:]]))
+        self.vectors = np.stack(rows, 0)
+        #logger.info(f"loaded {len(self.vectors)} rows from {fn}")
+
+
+def get_glove_embeddings(
+    idx_w,
+    name="glove-wiki-gigaword-100",
+    dim=None,
+):
+    """
+
+    Inputs:
+        - idx_w: an indexed list of words, likely in the form of a List
+        - name: the path of the glove vectors file, typically in data/...
+    """
+    if name.startswith("data"):
+        glove_vectors = LocalGlove(name, idx_w)
+    else:
+        glove_vectors = gensim.downloader.load(name)
+    lst = []
+    V = glove_vectors.vectors
+    missing = []
+    for w_ in idx_w:
+        if name.startswith("data"):
+            w = w_
+        else:
+            w = w_.lower()
+        if w in glove_vectors.key_to_index:
+            lst.append(V[glove_vectors.key_to_index[w]])
+        else:
+            lst.append(np.random.randn(V.shape[1]))
+            missing.append(w)
+    #logger.info(f"found {len(lst)-len(missing)}/{len(lst)} glove embeddings")
+    #logger.info(f"missing {missing[:10] + ['...']}")
+    emb = np.stack(lst, 0)
+    if dim is not None and dim != emb.shape[-1]:
+        emb = GaussianRandomProjection(
+            n_components=dim, random_state=0
+        ).fit_transform(emb)
+    return emb
 
 
 # ---------------------------------------------------------------------------
