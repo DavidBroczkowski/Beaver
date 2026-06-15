@@ -10,6 +10,11 @@ from beaver.constraints.base_constraints import (
     enforce_semantic_constraint,
 )
 from beaver.utils import log_json
+from beaver.utils.tokenizer_utils import (
+    get_tokenizer,
+    tokenize,
+    decode
+)
 from beaver.verifiers.base_verifier import BaseVerifier
 from beaver.verifiers.frontier import Frontier, FrontierElement
 from beaver.verifiers.worker_common import (
@@ -81,9 +86,7 @@ def _worker_process_instance(args):
         )
 
         # Construct full decoded sequences
-        current_decoded = _w.tokenizer.decode(
-            previous_element.tokens, skip_special_tokens=True
-        )
+        current_decoded = decode(previous_element.tokens)
         decoded_sequences = np.array([current_decoded + tok for tok in decoded_tokens])
 
         # Construct full token lists
@@ -112,7 +115,7 @@ def _worker_process_instance(args):
 
         presemantic_check_time = time.time()
 
-        # Semantic checking -- this is the important lines!
+        # Semantic checking -- these are the important lines!
         semantic_check_mask = np.logical_or(
             # aka check_call_fn
             check_semantic_call(
@@ -265,9 +268,7 @@ def _worker_process_instance(args):
         running_results = {
             "transition": transitions,
             "expanded element": element.tokens,
-            "decoded element": _w.tokenizer.decode(
-                element.tokens, skip_special_tokens=False
-            ),
+            "decoded element": decode(element.tokens),
             "exact_prompt": final_prompt,
             "num_violations": num_violations,
             "total_violation_prob": total_violation_prob,
