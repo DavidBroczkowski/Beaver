@@ -10,11 +10,10 @@ from beaver.constraints.base_constraints import (
     enforce_semantic_constraint,
 )
 from beaver.utils import log_json
-from beaver.utils.tokenizer_utils import (
-    get_tokenizer,
-    tokenize,
-    decode
+from beaver.utils.glove_emb_utils import (
+    get_glove_embeddings
 )
+
 from beaver.verifiers.base_verifier import BaseVerifier
 from beaver.verifiers.frontier import Frontier, FrontierElement
 from beaver.verifiers.worker_common import (
@@ -79,14 +78,14 @@ def _worker_process_instance(args):
                 (
                     ""
                     if i in _w.eos_tokens
-                    else _w.tokenizer.decode([i], skip_special_tokens=True)
+                    else _w.tokenizer.decode([i])
                 )
                 for i in valid_indices
             ]
         )
 
         # Construct full decoded sequences
-        current_decoded = decode(previous_element.tokens)
+        current_decoded = _w.tokenizer.decode(previous_element.tokens)
         decoded_sequences = np.array([current_decoded + tok for tok in decoded_tokens])
 
         # Construct full token lists
@@ -328,8 +327,8 @@ def _worker_process_instance(args):
 
 
 class FrontierVerifier(BaseVerifier):
-    def __init__(self, model, dataset, server_addr, **kwargs):
-        super().__init__(model, dataset, server_addr, **kwargs)
+    def __init__(self, model, dataset, **kwargs):
+        super().__init__(model, dataset, **kwargs)
         self.frontier_topp = kwargs.get("max_frontier_prob", 1.0)
         self.frontier_topk = kwargs.get("max_frontier_size", -1)
         self.frontier_scoring_strategy = kwargs.get(
@@ -341,12 +340,15 @@ class FrontierVerifier(BaseVerifier):
         config["frontier_topp"] = self.frontier_topp
         config["frontier_topk"] = self.frontier_topk
         config["frontier_scoring_strategy"] = self.frontier_scoring_strategy
+        config["idx_emb"] = get_glove_embeddings(self.tokenizer.idx_w, "data/glove.840B.300d.txt")
+        config["vocab_size"] = len(self.tokenizer.idx_w)
 
         # dataset = self._tokenize_dataset(dataset)
 
         # Handle origin_code field (secure_code dataset)
         for i in range(len(dataset)):
             if "origin_code" in dataset[i]:
+                # FIXME: Don't know what's going on with the encoder here
                 dataset[i]["origin_code_ids"] = self.tokenizer.encode(
                     dataset[i]["origin_code"], add_special_tokens=False
                 )
