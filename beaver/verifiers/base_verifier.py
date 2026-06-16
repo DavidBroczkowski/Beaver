@@ -50,8 +50,7 @@ class BaseVerifier(ABC):
         self.use_cache: bool = kwargs.get("use_cache", True)
 
         self.model_name = model
-        # FIXME: dataset needs to go in as training data into the tokenizer to create the conversion datatypes
-        self.tokenizer = NLTK_Tokenizer(DATASET GOES IN HERE)
+        self.tokenizer = NLTK_Tokenizer(dataset)
         self.semantic_symbol = semantic_symbol
 
         # Common generation parameters (previously duplicated in subclasses)
