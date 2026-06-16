@@ -21,7 +21,7 @@ class NLTK_Tokenizer:
         return
 
     def get_tokenizer(self, train, vocab_size=None, unk=False):
-        counts = Counter(w for ws in train["sent"] for w in ws)
+        counts = Counter(w for row in train for w in row["prompt"])
         words = []
         for w in [PAD] + ([UNK] if unk else []):
             words.append(w)
@@ -52,16 +52,16 @@ class NLTK_Tokenizer:
         return out
     
 
-    def normalize_sent(self, sent):
-        """
-        Normalizes a sentence, a String, in preparation for tokenizing
+def normalize_sent(sent):
+    """
+    Appends and prepends SOS and EOS tokens respectfully and tokenizes the sentence via the NLTK schema
 
-        Input:
-            - sent: a String containing the sentence to normalize
-        Output:
-            - a list containing the separated normalized sentence
-        """
-        return word_tokenize(sent)
+    Input:
+        - sent: a String containing the sentence to normalize
+    Output:
+        - a list containing the separated normalized sentence
+    """
+    return ["<s>"] + word_tokenize(sent) + ["</s>"]
 
 def initialize_llguidance(w_idx, Tokenizer: Any):
     """
