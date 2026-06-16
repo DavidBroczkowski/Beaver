@@ -16,11 +16,9 @@ import numpy as np
 import torch
 
 from beaver.utils import log_json
-from beaver.utils.tokenizer_utils import (
-    get_tokenizer,
-    tokenize,
-    decode
-)
+from beaver.utils.tokenizer_utils import initialize_llguidance
+from beaver.utils.glove_emb_utils import embed
+
 
 # ---------------------------------------------------------------------------
 # Single global worker state — populated by init_worker_state() in each
@@ -43,12 +41,10 @@ def init_worker_state(config_dict):
     # Clear any previous state without reassigning the object
     _w.__dict__.clear()
 
-    _w.model_namex = config_dict["model_name"]  # Store model (parent nn.Module)
-    # _w.tokenizer = AutoTokenizer.from_pretrained(config_dict["model_name"])
-    # _w.lltokenizer = from_tokenizer(_w.tokenizer)
-    # FIXME: this is a hard coded value, can we make it dynamic?
-    _w.vocab_size = 2196016  # Store total vocab size including special tokens
-    _w.server_addr = config_dict["server_addr"]
+    _w.model_name = config_dict["model_name"]  # Store model (parent nn.Module)
+    _w.tokenizer = config_dict["tokenizer"]
+    _w.lltokenizer = initialize_llguidance(_w.tokenizer.w_idx)
+    _w.vocab_size = config_dict["vocab_size"]  # Store total vocab size including special tokens
     _w.ebnf = config_dict["ebnf"]
     _w.dataset_name = config_dict["dataset_name"]
     _w.use_cache = config_dict.get("use_cache", True)
@@ -56,9 +52,7 @@ def init_worker_state(config_dict):
     _w.top_p = config_dict.get("top_p", 1.0)
     _w.top_k = config_dict.get("top_k", -1)
     _w.eos_tokens = config_dict.get("eos_tokens", [])
-    # _w.stop_tokens = [
-       # _w.tokenizer.decode([et], skip_special_tokens=False) for et in _w.eos_tokens
-    #]
+    _w.idx_emb = config_dict.get("idx_emb")
     _w.gen_length = config_dict.get("gen_length", 128)
     _w.epsilon = config_dict.get("epsilon", 0.01)
     _w.verbose = config_dict.get("verbose", False)
@@ -95,8 +89,8 @@ def init_worker_state(config_dict):
 # ---------------------------------------------------------------------------
 
 
-def build_prompt(instance, continuation, w_idx):
-    """Build the final prompt string sent to the vLLM completions API.
+def build_prompt(instance, continuation):
+    """Build the final prompt string sent to the model as input
 
     Args:
         instance: Dict with at least ``prompt`` (string). May also contain
@@ -105,15 +99,15 @@ def build_prompt(instance, continuation, w_idx):
             being extended).
 
     Returns:
-        The prompt string fully encoded 
+        A torch.Tensor containing the word embeddings of the prompt
     """
-    prompt_text = instance["prompt"]
-    prompt_tokens = tokenize(prompt_text)
+    prompt_tokens = _w.tokenizer.normalize_sent(instance["prompt"])
+    prompt_token_ids = _w.tokenizer.tokenize(prompt_text) # after this will be in the form of a list of indices
 
     if continuation:
-        return get_glove_embeddings(prompt_tokens + decode(continuation))
+        return embed(prompt_tokens + continuation)
 
-    return get_glove_embeddings(prompt_tokens)
+    return embed(prompt_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -141,45 +135,13 @@ def model_generate_next_token_logprobs(instance, continuation):
         if _w.verbose:
             print(f"prompt: {prompt}")
 
-        # --- replace this with the forward pass ------------------------------------
-
-        # response = _w.client.completions.create(
-        #     model=_w.model_name,
-        #     prompt=prompt,
-        #     max_tokens=1,
-        #     temperature=_w.temperature,
-        #     logprobs=min(_w.num_logprobs, _w.vocab_size),
-        #     stop=[],
-        #     extra_body={
-        #         "chat_template_kwargs": {"enable_thinking": False},
-        #     },
-        # )
-
+        # forward pass
         model = _w.model_name
-        logits = model.forward(emb_prompt)
+        logits = model.forward(prompt)
         logprobs = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float)
-        
-
-        # logprobs in the OpenAI API gives you the probability of the top x tokens you specify you want
-        # but here we have an open model, so you should not need a map to the vocab as it is size vocab
-
-        # Extract logprobs from response
-        # logprobs_obj = response.choices[0].logprobs
-        # if (
-        #     logprobs_obj is None
-        #     or not hasattr(logprobs_obj, "top_logprobs")
-        #     or logprobs_obj.top_logprobs is None
-        # ):
-        #     raise ValueError(
-        #         "No logprobs returned from server. "
-        #         "Make sure server was started with --max-logprobs -1"
-        #     )
-        
-        # top_logprobs_dict = logprobs_obj.top_logprobs[0]
         
         # FIXME: I believe that you can index straight down? might have to check that
         logprobs_w_ids = []
-        i = 0
         for logprob in logprobs.items():
             token_id = i
             logprobs_w_ids.append([token_id, logprob])
@@ -304,7 +266,6 @@ def get_grammar_mask(tokens):
     if _w.use_grammar:
         from beaver.verifiers.llguidance_grammar import get_next_token_bool_mask
 
-        # FIXME: tokenizer issue
         return get_next_token_bool_mask(tokens, _w.lltokenizer, _w.ebnf)
 
     # Return all True for vocab_size
@@ -322,57 +283,6 @@ def log_profiling(profiling_data, profile_log_file):
     if _w.verbose:
         print(profiling_data)
 
-# ---------------------------------------------------------------------------
-# LocalGlove - a class to hold the Glove embedding vectors, from TransformerPrograms Friedman et al.
-# ---------------------------------------------------------------------------
-
-class LocalGlove:
-    def __init__(self, fn, idx_w=None):
-        rows = []
-        self.key_to_index = {}
-        need = set(idx_w) if idx_w is not None else None
-        with open(fn, "r", encoding='utf-8') as f:
-            for line in f:
-                i = line.find(" ")
-                w = line[:i]
-                if (not need) or w in need:
-                    parts = line.strip().split(" ")
-                    self.key_to_index[parts[0]] = len(rows)
-                    rows.append(np.array([float(v) for v in parts[1:]]))
-        self.vectors = np.stack(rows, 0)
-        #logger.info(f"loaded {len(self.vectors)} rows from {fn}")
-
-
-def get_glove_embeddings(
-    idx_w,
-    name="glove-wiki-gigaword-100",
-    dim=None,
-):
-    if name.startswith("data"):
-        glove_vectors = LocalGlove(name, idx_w)
-    else:
-        glove_vectors = gensim.downloader.load(name)
-    lst = []
-    V = glove_vectors.vectors
-    missing = []
-    for w_ in idx_w:
-        if name.startswith("data"):
-            w = w_
-        else:
-            w = w_.lower()
-        if w in glove_vectors.key_to_index:
-            lst.append(V[glove_vectors.key_to_index[w]])
-        else:
-            lst.append(np.random.randn(V.shape[1]))
-            missing.append(w)
-    #logger.info(f"found {len(lst)-len(missing)}/{len(lst)} glove embeddings")
-    #logger.info(f"missing {missing[:10] + ['...']}")
-    emb = np.stack(lst, 0)
-    if dim is not None and dim != emb.shape[-1]:
-        emb = GaussianRandomProjection(
-            n_components=dim, random_state=0
-        ).fit_transform(emb)
-    return emb
 
 
 # ---------------------------------------------------------------------------
