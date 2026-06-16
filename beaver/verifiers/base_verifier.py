@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from beaver.utils.tokenizer_utils import NLTK_Tokenizer
 
 import beaver.constraints  # ensures all dataset modules are registered
 
@@ -14,12 +14,10 @@ class BaseVerifier(ABC):
         self,
         model,
         dataset,
-        server_addr,
         grammar,
         semantic_symbol=None,
         **kwargs,
     ) -> None:
-        self.server_addr = server_addr
         self.grammar = grammar
 
         # Grammar loading
@@ -52,7 +50,8 @@ class BaseVerifier(ABC):
         self.use_cache: bool = kwargs.get("use_cache", True)
 
         self.model_name = model
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
+        # FIXME: dataset needs to go in as training data into the tokenizer to create the conversion datatypes
+        self.tokenizer = NLTK_Tokenizer(DATASET GOES IN HERE)
         self.semantic_symbol = semantic_symbol
 
         # Common generation parameters (previously duplicated in subclasses)
@@ -82,7 +81,6 @@ class BaseVerifier(ABC):
         check_call_fn, instance_context_fn, check_fn = _REGISTRY[self.dataset_name]
         return {
             "model_name": self.model_name,
-            "server_addr": self.server_addr,
             "ebnf": self.ebnf,
             "dataset_name": self.dataset_name,
             "use_cache": self.use_cache,
