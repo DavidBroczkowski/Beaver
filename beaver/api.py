@@ -12,6 +12,7 @@ from beaver.logging import get_log_data, summarize_log_data, summarize_profile_d
 from beaver.verifiers.frontier_verifier import FrontierVerifier
 from beaver.verifiers.sampling_verifier import SamplingVerifier
 from beaver.constraints.base_constraints import register_constraint
+from beaver.utils.tokenizer_utils import normalize_sent
 
 
 
@@ -24,8 +25,6 @@ def _default_instance_context_fn(_inst):
 
 
 def _prepare_dataset_from_prompts(prompts: list[dict]):
-    from datasets import Dataset
-
     data = []
     for i, item in enumerate(prompts):
         row = dict(item)
@@ -33,9 +32,11 @@ def _prepare_dataset_from_prompts(prompts: list[dict]):
             raise ValueError(
                 f"Each prompt dict must contain a 'prompt' key. Got: {row}"
             )
+        row["prompt"] = normalize_sent(row["prompt"])
         row.setdefault("idx", i)
         data.append(row)
-    return Dataset.from_list(data)
+
+    return data
 
 
 # ── Main run() function ────────────────────────────────────────────────────
@@ -135,6 +136,8 @@ def run(
 
 
     # ── Prepare dataset and register constraint ────────────────────────────
+    # ds is now an list of dictionaries where "prompt" in each dictionary is a list of word tokens with SOS and EOS tokens
+    # UNK and PAD is handled by the tokenizer function which converts it into ids
     ds = _prepare_dataset_from_prompts(prompts)
 
 
