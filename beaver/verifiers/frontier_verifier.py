@@ -346,14 +346,14 @@ class FrontierVerifier(BaseVerifier):
         # dataset = self._tokenize_dataset(dataset)
 
         # Handle origin_code field (secure_code dataset)
-        for i in range(len(dataset)):
-            if "origin_code" in dataset[i]:
-                # FIXME: Don't know what's going on with the encoder here
-                dataset[i]["origin_code_ids"] = self.tokenizer.encode(
-                    dataset[i]["origin_code"], add_special_tokens=False
-                )
-            else:
-                dataset[i]["origin_code_ids"] = []
+        # for i in range(len(dataset)):
+        #     if "origin_code" in dataset[i]:
+        #         # FIXME: Don't know what's going on with the encoder here, but for now, we don't need it so commenting it out
+        #         dataset[i]["origin_code_ids"] = self.tokenizer.encode(
+        #             dataset[i]["origin_code"], add_special_tokens=False
+        #         )
+        #     else:
+        #         dataset[i]["origin_code_ids"] = []
 
         return self._run_pool(
             dataset,
