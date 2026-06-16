@@ -126,8 +126,8 @@ def _worker_process_instance(args):
 
 
 class SamplingVerifier(BaseVerifier):
-    def __init__(self, model, dataset, server_addr, **kwargs):
-        super().__init__(model, dataset, server_addr, **kwargs)
+    def __init__(self, model, dataset, **kwargs):
+        super().__init__(model, dataset, **kwargs)
 
     def __call__(self, dataset, run_log_dir):
         config = self._build_worker_config()
