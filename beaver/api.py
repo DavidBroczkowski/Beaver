@@ -50,8 +50,6 @@ def run(
     cache_dataset_name: str | None = None,
     instance_context_fn: Callable | None = None,
     model: str,
-    server_addr: str | None = None,
-    auto_server: bool = True,
     # Model config — for auto_server
     model_config: str | Path | dict | None = None,
     # Experiment params
@@ -77,10 +75,6 @@ def run(
     # Output
     log_dir: str = "logging",
     verbose: bool = False,
-    # Server auto-management
-    server_port: int | None = None,
-    gpu_visible_devices: str | None = None,
-    extra_vllm_args: list[str] | None = None,
 ) -> list[dict]:
     """Run BEAVER verification on a model.
 
@@ -101,10 +95,7 @@ def run(
         instance_context_fn: ``(instance) -> str``. Returns a string that
             varies per instance and is included in the cache key. Only used
             when ``cache=True``.
-        model: HuggingFace model ID or local path (required).
-        server_addr: URL of a running vLLM server. Either this or
-            ``auto_server=True`` must be set.
-        auto_server: Start and stop a vLLM server automatically.
+        model: HuggingFace model ID or local path (required)
         model_config: Dict or path to a YAML file with vLLM server overrides.
             Merged on top of ``configs/models/default.yaml``.
         verifier: ``"frontier"`` or ``"sampling"``.
@@ -124,9 +115,6 @@ def run(
         semantic_symbol: Symbol used to mark semantic completion (e.g. ``">>``").
         log_dir: Directory for run logs.
         verbose: Verbose output.
-        server_port: Port for the auto-managed vLLM server.
-        gpu_visible_devices: ``CUDA_VISIBLE_DEVICES`` for the auto server.
-        extra_vllm_args: Extra raw flags appended to ``vllm serve``.
 
     Returns:
         List of per-instance result dicts.
@@ -164,46 +152,12 @@ def run(
     # ── Create log dir & save args ─────────────────────────────────────────
     run_log_dir = new_log_dir(Path(log_dir))
 
-    # ── Auto server management ─────────────────────────────────────────────
-    server_proc = None
-    if auto_server and server_addr is None:
-        from beaver.server import start_server, stop_server
-        from beaver.server import load_model_config as _load_model_cfg
-
-        _mcfg = _load_model_cfg(
-            model,
-            model_config if isinstance(model_config, (str, Path)) else None,
-        )
-        resolved_port = (
-            server_port if server_port is not None else int(_mcfg.get("port", 8000))
-        )
-        server_addr = f"http://localhost:{resolved_port}"
-        server_proc = start_server(
-            model_id=model,
-            port=resolved_port,
-            gpu_visible_devices=gpu_visible_devices,
-            model_config_path=(
-                model_config if isinstance(model_config, (str, Path)) else None
-            ),
-            extra_vllm_args=extra_vllm_args,
-            log_dir=run_log_dir,
-        )
-        if server_proc is None:
-            raise RuntimeError(
-                f"Failed to start vLLM server for model '{model}' on port {resolved_port}."
-            )
-    elif server_addr is None:
-        raise ValueError(
-            "Provide 'server_addr' (URL of a running vLLM server) or set auto_server=True."
-        )
-
     try:
         return _run_inner(
             dataset=ds,
             dataset_name=effective_dataset_name,
             use_cache=cache,
             model=model,
-            server_addr=server_addr,
             verifier=verifier,
             gen_length=gen_length,
             temperature=temperature,
@@ -225,11 +179,6 @@ def run(
             log_dir=run_log_dir,
             verbose=verbose,
         )
-    finally:
-        if server_proc is not None:
-            from beaver.server import stop_server
-
-            stop_server(server_proc)
 
 
 # ── Console tee ───────────────────────────────────────────────────────────
@@ -271,7 +220,6 @@ def _run_inner(
     dataset_name,
     use_cache,
     model,
-    server_addr,
     verifier,
     gen_length,
     temperature,
@@ -303,7 +251,6 @@ def _run_inner(
         run_args = dict(
             model=model,
             dataset=dataset_name,
-            server_addr=server_addr,
             verifier=verifier,
             gen_length=gen_length,
             temperature=temperature,
@@ -348,7 +295,6 @@ def _run_inner(
             llm = FrontierVerifier(
                 model,
                 dataset_name,
-                server_addr,
                 max_frontier_size=max_frontier_size,
                 max_frontier_prob=max_frontier_prob,
                 frontier_scoring_strategy=frontier_scoring_strategy,
@@ -356,7 +302,7 @@ def _run_inner(
             )
         elif verifier == "sampling":
             llm = SamplingVerifier(
-                model, dataset_name, server_addr, **common_kwargs
+                model, dataset_name, **common_kwargs
             )
         else:
             raise ValueError(
