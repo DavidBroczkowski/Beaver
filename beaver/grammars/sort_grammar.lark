@@ -1,0 +1,4 @@
+// Sorting grammar
+
+start: NUMBER (" " NUMBER)*
+NUMBER: ("0".."4")+
