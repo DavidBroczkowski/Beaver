@@ -51,8 +51,6 @@ def run(
     cache_dataset_name: str | None = None,
     instance_context_fn: Callable | None = None,
     model: str,
-    # Model config — for auto_server
-    model_config: str | Path | dict | None = None,
     # Experiment params
     verifier: str = "frontier",
     gen_length: int = 32,
@@ -96,9 +94,7 @@ def run(
         instance_context_fn: ``(instance) -> str``. Returns a string that
             varies per instance and is included in the cache key. Only used
             when ``cache=True``.
-        model: HuggingFace model ID or local path (required)
-        model_config: Dict or path to a YAML file with vLLM server overrides.
-            Merged on top of ``configs/models/default.yaml``.
+        model: a loaded nn.Module
         verifier: ``"frontier"`` or ``"sampling"``.
         gen_length: Max tokens per sequence.
         temperature / top_p / top_k: Sampling parameters.
@@ -155,33 +151,33 @@ def run(
     # ── Create log dir & save args ─────────────────────────────────────────
     run_log_dir = new_log_dir(Path(log_dir))
 
-    try:
-        return _run_inner(
-            dataset=ds,
-            dataset_name=effective_dataset_name,
-            use_cache=cache,
-            model=model,
-            verifier=verifier,
-            gen_length=gen_length,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            max_iterations=max_iterations,
-            epsilon=epsilon,
-            max_workers=max_workers,
-            num_logprobs=num_logprobs,
-            max_frontier_size=max_frontier_size,
-            max_frontier_prob=max_frontier_prob,
-            frontier_scoring_strategy=frontier_scoring_strategy,
-            use_grammar=use_grammar,
-            use_chat_template=use_chat_template,
-            system_message=system_message,
-            fewshot_messages=fewshot_messages,
-            grammar=grammar,
-            semantic_symbol=semantic_symbol,
-            log_dir=run_log_dir,
-            verbose=verbose,
-        )
+    return _run_inner(
+        dataset=ds,
+        dataset_name=effective_dataset_name,
+        use_cache=cache,
+        model=model,
+        verifier=verifier,
+        gen_length=gen_length,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        max_iterations=max_iterations,
+        epsilon=epsilon,
+        max_workers=max_workers,
+        num_logprobs=num_logprobs,
+        max_frontier_size=max_frontier_size,
+        max_frontier_prob=max_frontier_prob,
+        frontier_scoring_strategy=frontier_scoring_strategy,
+        use_grammar=use_grammar,
+        use_chat_template=use_chat_template,
+        system_message=system_message,
+        fewshot_messages=fewshot_messages,
+        grammar=grammar,
+        semantic_symbol=semantic_symbol,
+        log_dir=run_log_dir,
+        verbose=verbose,
+    )
+
 
 
 # ── Console tee ───────────────────────────────────────────────────────────

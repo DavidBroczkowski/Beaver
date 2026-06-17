@@ -93,7 +93,7 @@ def build_prompt(instance, continuation):
     """Build the final prompt string sent to the model as input
 
     Args:
-        instance: Dict with at least ``prompt`` (string). May also contain
+        instance: Dict with at least ``prompt`` (list of String). May also contain
             ``system_prompt`` and ``fewshot_messages`` (per-instance overrides).
         continuation: List of token IDs generated so far (the partial sequence
             being extended).
@@ -101,13 +101,18 @@ def build_prompt(instance, continuation):
     Returns:
         A torch.Tensor containing the word embeddings of the prompt
     """
-    prompt_tokens = _w.tokenizer.normalize_sent(instance["prompt"])
-    prompt_token_ids = _w.tokenizer.tokenize(prompt_text) # after this will be in the form of a list of indices
+    if _w.verbose:
+        print("[DEBUG] Tokenizing prompt into ids...")
+
+    prompt_token_ids = _w.tokenizer.tokenize(instance["prompt"]) # after this will be in the form of a list of indices
+    
+    if _w.verbose:
+        print("[DEBUG] Embedding prompt...")
 
     if continuation:
-        return embed(prompt_tokens + continuation)
+        return embed(prompt_token_ids + continuation)
 
-    return embed(prompt_tokens)
+    return embed(prompt_token_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -133,22 +138,25 @@ def model_generate_next_token_logprobs(instance, continuation):
 
         # FIXME: right now this is a list of vectors, aka word embeddings
         if _w.verbose:
+            print("[DEBUG] Prompt built successfully")
             print(f"prompt: {prompt}")
 
         # forward pass
         model = _w.model_name
+
+        if _w.verbose:
+            print("[DEBUG] Running the forward pass...")
         logits = model.forward(prompt)
+
         logprobs = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float)
-        
-        # FIXME: I believe that you can index straight down? might have to check that
+        if _w.verbose:
+            print(f"[DEBUG] Received logprobs: {logprobs}")
+
         logprobs_w_ids = []
         for logprob in logprobs.items():
             token_id = i
             logprobs_w_ids.append([token_id, logprob])
             i += 1
-
-        if _w.verbose:
-            print(f"model response logprobs: {logprobs}")
 
         # prompt used to be an array of ids of words, changed now, so have to figure that out
         return np.array(logprobs), prompt
@@ -166,6 +174,9 @@ def worker_setup(args):
 
     Returns (instance, log_file, profile_log_file).
     """
+    if _w.verbose:
+        print("[DEBUG] Setting up worker...")
+
     instance, run_log_dir = args
 
     assert _w.dataset_name is not None, "Worker dataset_name not initialized"
@@ -181,6 +192,8 @@ def worker_setup(args):
     }
     log_json(setup_info, log_file)
 
+    if _w.verbose:
+        print("[DEBUG] Worker setup completed")
     return instance, log_file, profile_log_file
 
 
@@ -199,6 +212,9 @@ def apply_top_p_top_k(log_probs):
         (filtered_log_probs, culled_prob_sum) where filtered_log_probs has the
         same [N', 2] shape with pruned rows removed.
     """
+    if _w.verbose:
+        print("[DEBUG] Applying top_p and top_k pruning...")
+
     if _w.top_p >= 1.0 and _w.top_k < 0:
         return log_probs, 0.0
 
@@ -224,6 +240,8 @@ def apply_top_p_top_k(log_probs):
             culled_prob_sum += probs[cutoff:].sum()
             sorted_lp = sorted_lp[:cutoff]
 
+    if _w.verbose:
+        print("[DEBUG] Pruning complete")
     return sorted_lp, culled_prob_sum
 
 
@@ -263,6 +281,9 @@ def get_grammar_mask(tokens):
     Returns:
         boolean numpy array of shape (vocab_size,).
     """
+    if _w.verbose:
+        print("[DEBUG] Retrieving grammar mask via LLGuidance...")
+
     if _w.use_grammar:
         from beaver.verifiers.llguidance_grammar import get_next_token_bool_mask
 

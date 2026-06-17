@@ -207,8 +207,10 @@ def _worker_process_instance(args):
 
         model_generate_time = time.time()
 
-        # --- here, we generate the probabilities of the model , i.e., forward() --------------------------------
-        # have to change this
+        # --- generate the probabilities of the model --------------------------------
+        if _w.verbose:
+            print("[DEBUG] Beginning logprob generation...")
+
         model_logprobs, final_prompt = model_generate_next_token_logprobs(
             instance, element.tokens
         )
@@ -224,6 +226,11 @@ def _worker_process_instance(args):
 
         vocab_mask = get_grammar_mask(element.tokens)
 
+        if _w.verbose:
+            print("[DEBUG] Retrieved grammar mask")
+
+        if _w.verbose:
+            print("[DEBUG] Begin frontier updating...")
         (
             new_elements,
             presemantic_check_time,
@@ -232,11 +239,20 @@ def _worker_process_instance(args):
             total_violation_prob,
         ) = update_frontier(frontier, element, logprobs, vocab_mask)
 
+        if _w.verbose:
+            print("[DEBUG] Frontier updated")
+
         frontier.add_to_element(element, new_elements)
+
+        if _w.verbose:
+            print("[DEBUG] Begin pruning incomplete leaves...")
 
         frontier_pruned_prob = frontier.prune_incomplete_leaves(
             topp=_w.frontier_topp, topk=_w.frontier_topk
         )
+
+        if _w.verbose:
+            print("[DEBUG] Incomplete leaves pruned")
 
         update_results_time = time.time()
 
@@ -263,11 +279,14 @@ def _worker_process_instance(args):
 
         lower_bound = complete_prob_sum
 
+        if _w.verbose:
+            print("[DEBUG] Bounds updated")
+
         end_step_time = time.time()
         running_results = {
             "transition": transitions,
             "expanded element": element.tokens,
-            "decoded element": decode(element.tokens),
+            "decoded element": _w.tokenizer.decode(element.tokens),
             "exact_prompt": final_prompt,
             "num_violations": num_violations,
             "total_violation_prob": total_violation_prob,
@@ -340,20 +359,16 @@ class FrontierVerifier(BaseVerifier):
         config["frontier_topp"] = self.frontier_topp
         config["frontier_topk"] = self.frontier_topk
         config["frontier_scoring_strategy"] = self.frontier_scoring_strategy
+
+        if self.verbose:
+            print("[DEBUG] Retrieving glove embeddings...")
         config["idx_emb"] = get_glove_embeddings(self.tokenizer.idx_w, "data/glove.840B.300d.txt")
+        if self.verbose:
+            print("[DEBUG] Retrieved glove embeddings")
+
         config["vocab_size"] = len(self.tokenizer.idx_w)
 
         # dataset = self._tokenize_dataset(dataset)
-
-        # Handle origin_code field (secure_code dataset)
-        # for i in range(len(dataset)):
-        #     if "origin_code" in dataset[i]:
-        #         # FIXME: Don't know what's going on with the encoder here, but for now, we don't need it so commenting it out
-        #         dataset[i]["origin_code_ids"] = self.tokenizer.encode(
-        #             dataset[i]["origin_code"], add_special_tokens=False
-        #         )
-        #     else:
-        #         dataset[i]["origin_code_ids"] = []
 
         return self._run_pool(
             dataset,
