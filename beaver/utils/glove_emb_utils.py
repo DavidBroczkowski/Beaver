@@ -1,6 +1,4 @@
-# ---------------------------------------------------------------------------
-# LocalGlove - a class to hold the Glove embedding vectors, from TransformerPrograms Friedman et al.
-# ---------------------------------------------------------------------------
+
 from collections import Counter
 import copy
 from copy import deepcopy
@@ -21,7 +19,21 @@ from torch import nn
 
 
 class LocalGlove:
+    """
+    A class containing methods for loading GLoVE word embeddings, implemented from Transformer Programs by Friedman et al.
+
+    Attributes:
+        - key_to_index: a dictionary that maps words to the index they appear in in the embedding file
+        - vectors: a NumPy array containing the vectors for each word indexed. 
+    """
     def __init__(self, fn, idx_w=None):
+        """
+        Initializes the class and its attributes
+
+        Inputs:
+            - fn: a String containing the path of the GLoVE embeddings file, in a .txt format
+            - idx_w: a NumPy array where the input of an index returns a word. Maps indices to words
+        """
         rows = []
         self.key_to_index = {}
         need = set(idx_w) if idx_w is not None else None
@@ -42,6 +54,16 @@ def get_glove_embeddings(
     name="glove-wiki-gigaword-100",
     dim=None,
 ):
+    """
+    Retrieves the GLoVE embeddings
+
+    Inputs: 
+        - idx_w: a NumPy array where the input of an index returns a word. Maps indices to words
+        - name: Can be either the path of the GLoVE embeddings .txt file, begins with "data", or the name of the GLoVE file to download
+
+    Output:
+        - a 2d NumPy array containing the GLoVE embeddings for the given idx_w by the token's id
+    """
     if name.startswith("data"):
         glove_vectors = LocalGlove(name, idx_w)
     else:
