@@ -1,0 +1,12 @@
+# experiments/reverse/reverse.yaml
+experiment_file: reverse.py
+load_prompts_fn: load_prompts
+constraint_fn: constraint_fn
+check_call_fn: check_call_fn
+instance_context_fn: instance_context_fn
+cache: true
+cache_dataset_name: reverse
+verifier: frontier
+gen_length: 32
+epsilon: 0.05
+max_workers: 8
