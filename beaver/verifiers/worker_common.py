@@ -108,11 +108,16 @@ def build_prompt(instance, continuation):
     
     if _w.verbose:
         print("[DEBUG] Embedding prompt...")
+    
+    if _w.glove_embed:
+        if continuation:
+            return embed(prompt_token_ids + continuation)
 
-    if continuation:
-        return embed(prompt_token_ids + continuation)
-
-    return embed(prompt_token_ids)
+        return embed(prompt_token_ids)
+    else:
+        if continuation:
+            return prompt_token_ids + continuation
+        return prompt_token_ids
 
 
 # ---------------------------------------------------------------------------
