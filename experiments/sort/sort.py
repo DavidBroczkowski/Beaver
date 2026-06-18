@@ -1,34 +1,39 @@
 """Sorting Experiment - model must produce a sorted list of integers"""
-import csv
+import json
 import torch
 from pathlib import Path
 
 DATASET_NAME = "sort"
 
 _DATA_DIR = Path(__file__).parent / "data"
-_DEFAULT_DATASET_PATH = str(_DATA_DIR / "sort.csv")
+_DEFAULT_DATASET_PATH = str(_DATA_DIR / "sort.json")
 
 def load_input_rows():
     """
-    Returns the data in the csv file for the dataset
+    Returns the data in the json file for the dataset
 
     Output:
-        - a 2d list containing each input as a list of Strings
+        - a dictionary containing the input and appropriate tags
     """
-    with open(_DEFAULT_DATASET_PATH, 'r', newline='') as csvfile:
-        data = csv.reader(csvfile)
-        return list(data)
+    with open(_DEFAULT_DATASET_PATH, 'r') as file:
+        data = json.load(file)
+        return data
 
 def load_prompts(**kwargs) -> list[dict]:
     data = load_input_rows()
+    inputs = data["inputs"]
+    tags = data["tags"]
 
     instances = []
-    for row in data:
-        input_dict = {
-            "input": (int(num) for num in row),
-            "prompt": " ".join(row)
-        }
-        instances.append(input_dict)
+    for i in range(len(inputs)):
+        instances.append(
+            {
+                "prompt": inputs[i],
+                "inputs": inputs[i],
+                "tags": tags[i]
+            }
+        )
+
     return instances
 
 def constraint_fn(instance: dict, sequence: str) -> bool:
@@ -52,6 +57,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Sort experiment.")
     parser.add_argument("--model", required=True) # must be a path to the model 
     parser.add_argument("--log_dir", default="beaver_logs")
+    parser.add_argument("--glove_embed", default=0)
     args, _ = parser.parse_known_args()
 
     beaver.run(
@@ -63,4 +69,5 @@ if __name__ == "__main__":
         instance_context_fn=instance_context_fn,
         model=torch.load(args.model, weights_only=False).eval(),
         log_dir=args.log_dir,
+        glove_embed=args.glove_embed
     )
