@@ -43,7 +43,7 @@ def init_worker_state(config_dict):
 
     _w.model_name = config_dict["model_name"]  # Store model (parent nn.Module)
     _w.tokenizer = config_dict["tokenizer"]
-    _w.lltokenizer = initialize_llguidance(_w.tokenizer.w_idx)
+    _w.lltokenizer = initialize_llguidance(_w.tokenizer.w_idx, _w.tokenizer.idx_w)
     _w.vocab_size = config_dict["vocab_size"]  # Store total vocab size including special tokens
     _w.ebnf = config_dict["ebnf"]
     _w.dataset_name = config_dict["dataset_name"]
