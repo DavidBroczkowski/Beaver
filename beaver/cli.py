@@ -79,6 +79,7 @@ _BEAVER_RUN_KEYS = frozenset(
         "num_shots",
         "verbose",
         "log_dir",
+        "glove_embed",
     }
 )
 
@@ -120,17 +121,6 @@ def _run_cmd(argv):
         required=True,
         help="Path to experiment YAML (e.g. experiments/gsm_symbolic/experiment.yaml).",
     )
-
-    # Server
-    parser.add_argument("--server_addr", type=str, default=None)
-    parser.add_argument("--classifier_addr", type=str, default=None)
-    parser.add_argument(
-        "--auto_server",
-        action="store_true",
-        help="Automatically start and stop a vLLM server.",
-    )
-    parser.add_argument("--server_port", type=int, default=None)
-    parser.add_argument("--gpu_visible_devices", type=str, default=None)
 
     # Model
     parser.add_argument("--model", type=str, required=True)
@@ -176,6 +166,7 @@ def _run_cmd(argv):
         action="store_true",
     )
     parser.add_argument("--log_dir", type=str, default=None)
+    parser.add_argument("--glove_embed", type=int, default=0)
 
     args = parser.parse_args(argv)
 
@@ -235,9 +226,6 @@ def _run_cmd(argv):
     # ── Build beaver.run() kwargs ──────────────────────────────────────────
     run_kwargs = _get_run_kwargs(merged_cfg)
 
-    # ── Determine server ───────────────────────────────────────────────────
-    server_addr = args.server_addr if not args.auto_server else None
-
     # ── Call beaver.run() ──────────────────────────────────────────────────
     import beaver
 
@@ -251,10 +239,7 @@ def _run_cmd(argv):
         grammar=cfg.get("grammar"),
         semantic_symbol=cfg.get("semantic_symbol"),
         model=args.model,
-        server_addr=server_addr,
-        auto_server=args.auto_server,
-        server_port=args.server_port,
-        gpu_visible_devices=args.gpu_visible_devices,
+        glove_embed=args.glove_embed,
         **run_kwargs,
     )
 

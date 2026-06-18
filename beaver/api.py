@@ -68,6 +68,7 @@ def run(
     use_chat_template: bool = True,
     system_message: str | None = None,
     fewshot_messages: list | None = None,
+    glove_embed: bool = False,
     # Grammar / semantic symbol
     grammar: str | None = None,
     semantic_symbol: str | None = None,
@@ -172,6 +173,7 @@ def run(
         use_chat_template=use_chat_template,
         system_message=system_message,
         fewshot_messages=fewshot_messages,
+        glove_embed=glove_embed,
         grammar=grammar,
         semantic_symbol=semantic_symbol,
         log_dir=run_log_dir,
@@ -235,6 +237,7 @@ def _run_inner(
     use_chat_template,
     system_message,
     fewshot_messages,
+    glove_embed,
     grammar,
     semantic_symbol,
     log_dir,
@@ -262,6 +265,7 @@ def _run_inner(
             max_frontier_size=max_frontier_size,
             max_frontier_prob=max_frontier_prob,
             frontier_scoring_strategy=frontier_scoring_strategy,
+            glove_embed=glove_embed,
             use_grammar=use_grammar,
             use_chat_template=use_chat_template,
             log_dir=str(log_dir),
@@ -287,6 +291,7 @@ def _run_inner(
             chat_mode=use_chat_template,
             system_message=system_message,
             fewshot_messages=fewshot_messages,
+            use_grammar=use_grammar,
             use_cache=use_cache,
         )
 
