@@ -1,6 +1,7 @@
 """Sorting Experiment - model must produce a sorted list of integers"""
 import json
 import torch
+import numpy as np
 from pathlib import Path
 
 DATASET_NAME = "sort"
@@ -39,16 +40,16 @@ def load_prompts(**kwargs) -> list[dict]:
 def constraint_fn(instance: dict, sequence: str) -> bool:
     """True = acceptable, False = violation."""
     seq_list = sorted(int(x) for x in sequence.split())
-    in_list = sorted(int(x) for x in instance["input"].split())
+    in_list = sorted(int(x) for x in instance["inputs"])
     return seq_list == in_list
 
 def check_call_fn(instance, decoded_sequences, token_lists):
-    """Optional fast pre-filter — skip expensive checks on short prefixes."""
-    return True
+    """Don't check incomplete prefixes — let complete_flag trigger the check at EOS."""
+    return np.zeros(len(decoded_sequences), dtype=bool)
 
 def instance_context_fn(instance: dict) -> str:
-    """Cache key for this instance's constraint context."""
-    return ""
+    """Cache key includes the sorted input so results are per-instance, not per-sequence."""
+    return ",".join(sorted(instance["inputs"]))
 
 if __name__ == "__main__":
     import argparse
@@ -57,8 +58,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Sort experiment.")
     parser.add_argument("--model", required=True) # must be a path to the model 
     parser.add_argument("--log_dir", default="beaver_logs")
-    parser.add_argument("--glove_embed", default=0)
     args, _ = parser.parse_known_args()
+    loaded_model = torch.load(args.model, weights_only=False).eval()
+
 
     beaver.run(
         prompts=load_prompts(),
@@ -67,7 +69,6 @@ if __name__ == "__main__":
         cache=True,
         cache_dataset_name=DATASET_NAME,
         instance_context_fn=instance_context_fn,
-        model=torch.load(args.model, weights_only=False).eval(),
+        model=loaded_model,
         log_dir=args.log_dir,
-        glove_embed=args.glove_embed
     )
