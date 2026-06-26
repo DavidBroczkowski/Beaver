@@ -9,7 +9,7 @@ from beaver.constraints.base_constraints import (
     check_semantic_call,
     enforce_semantic_constraint,
 )
-from beaver.utils import log_json
+from beaver.utils.utils import log_json
 from beaver.utils.glove_emb_utils import (
     get_glove_embeddings
 )
@@ -72,21 +72,20 @@ def _worker_process_instance(args):
             int(log_probs[i, 0]): log_probs[i, 1] for i in range(len(log_probs))
         }
 
-        # Decode tokens individually
+        # Decode tokens individually — idx_w[i] gives a single string directly;
+        # decode() returns a list and would produce a 2-D numpy array.
         decoded_tokens = np.array(
             [
-                (
-                    ""
-                    if i in _w.eos_tokens
-                    else _w.tokenizer.decode([i])
-                )
+                "" if i in _w.eos_tokens else _w.tokenizer.idx_w[i]
                 for i in valid_indices
             ]
         )
 
-        # Construct full decoded sequences
-        current_decoded = _w.tokenizer.decode(previous_element.tokens)
-        decoded_sequences = np.array([current_decoded + tok for tok in decoded_tokens])
+        # Construct full decoded sequences as space-joined strings.
+        current_decoded = " ".join(_w.tokenizer.decode(previous_element.tokens, skip_special_tokens=True)).strip()
+        decoded_sequences = np.array(
+            [(current_decoded + " " + tok).strip() for tok in decoded_tokens]
+        )
 
         # Construct full token lists
         token_lists = np.array(
@@ -216,6 +215,9 @@ def _worker_process_instance(args):
         )
 
         # apply top-p and top-k, no need to change this here
+        # Note: for RASP tasks, our model is very good, with probs around 0.99 for a certain token
+        # therefore, this step will usually limit the Frontier to the correct answer
+        # and will have a low number of leaves in it as a result
         logprobs, reduced_logprobs = apply_top_p_top_k(model_logprobs)
 
         # Calculate pruned prob (from tokens that are not counted)
@@ -275,7 +277,9 @@ def _worker_process_instance(args):
 
         violation_prob_sum += total_violation_prob
 
-        upper_bound = incomplete_prob_sum + complete_prob_sum + pruned_prob_sum
+        upper_bound = min(
+            incomplete_prob_sum + complete_prob_sum + pruned_prob_sum, 1.0
+        )
 
         lower_bound = complete_prob_sum
 
@@ -346,8 +350,8 @@ def _worker_process_instance(args):
 
 
 class FrontierVerifier(BaseVerifier):
-    def __init__(self, model, dataset, **kwargs):
-        super().__init__(model, dataset, **kwargs)
+    def __init__(self, model, dataset, prompts, **kwargs):
+        super().__init__(model, dataset, prompts, **kwargs)
         self.frontier_topp = kwargs.get("max_frontier_prob", 1.0)
         self.frontier_topk = kwargs.get("max_frontier_size", -1)
         self.frontier_scoring_strategy = kwargs.get(
