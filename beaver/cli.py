@@ -11,6 +11,8 @@ import importlib.util
 import inspect
 import sys
 from pathlib import Path
+import os
+import torch
 
 import yaml
 
@@ -80,6 +82,9 @@ _BEAVER_RUN_KEYS = frozenset(
         "verbose",
         "log_dir",
         "glove_embed",
+        "gpu_uuid",
+        "model_type",
+        "model_args",
     }
 )
 
@@ -124,6 +129,8 @@ def _run_cmd(argv):
 
     # Model
     parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--model_type", type=str, required=True)
+    parser.add_argument("--model_args", type=str, required=True)
 
     # Data slicing (forwarded to load_prompts_fn)
     parser.add_argument("--start_idx", type=int, default=None)
@@ -166,7 +173,8 @@ def _run_cmd(argv):
         action="store_true",
     )
     parser.add_argument("--log_dir", type=str, default=None)
-    parser.add_argument("--glove_embed", type=int, default=0)
+    parser.add_argument("--glove_embed", type=int, default=None)
+    parser.add_argument("--gpu_uuid", type=str, default=None)
 
     args = parser.parse_args(argv)
 
@@ -215,8 +223,6 @@ def _run_cmd(argv):
         slicing_kwargs["end_idx"] = args.end_idx
     if args.debug_ids is not None:
         slicing_kwargs["debug_ids"] = args.debug_ids
-    if args.classifier_addr is not None:
-        slicing_kwargs["classifier_addr"] = args.classifier_addr
 
     load_kwargs = _get_load_prompts_kwargs(load_prompts_fn, merged_cfg, slicing_kwargs)
 
@@ -229,6 +235,10 @@ def _run_cmd(argv):
     # ── Call beaver.run() ──────────────────────────────────────────────────
     import beaver
 
+    # set GPU
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_uuid or "0"
+    print(f"[DEBUG] Using GPU {torch.cuda.get_device_name()} with properties {torch.cuda.get_device_properties()}")
+
     beaver.run(
         prompts=prompts,
         constraint_fn=constraint_fn,
@@ -239,7 +249,6 @@ def _run_cmd(argv):
         grammar=cfg.get("grammar"),
         semantic_symbol=cfg.get("semantic_symbol"),
         model=args.model,
-        glove_embed=args.glove_embed,
         **run_kwargs,
     )
 
