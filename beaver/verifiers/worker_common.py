@@ -2,7 +2,7 @@
 
 All multiprocessing worker state lives here as a single SimpleNamespace (`_w`),
 replacing the 17+ individual `_worker_*` globals that were duplicated across
-frontier_verifier.py and sampling_verifier.py.
+frontier_verifier.py.
 """
 
 import time
@@ -15,7 +15,7 @@ import httpx
 import numpy as np
 import torch
 
-from beaver.utils import log_json
+from beaver.utils.utils import log_json
 from beaver.utils.tokenizer_utils import initialize_llguidance
 from beaver.utils.glove_emb_utils import embed
 
@@ -38,6 +38,8 @@ def init_worker_state(config_dict):
     that modules which imported _w via ``from worker_common import _w``
     keep a reference to the same object.
     """
+
+    print(f"[DEBUG] config_dict: {config_dict}")
     # Clear any previous state without reassigning the object
     _w.__dict__.clear()
 
@@ -63,6 +65,19 @@ def init_worker_state(config_dict):
     _w.chat_mode = config_dict.get("chat_mode", False)
     _w.system_message = config_dict.get("system_message", None)
     _w.fewshot_messages = config_dict.get("fewshot_messages", [])
+    _w.glove_embed = config_dict["glove_embed"]
+
+    # Map each tag-vocab index to its corresponding word-vocab index so that
+    # model outputs (over d_vocab_out tag classes) can be expressed in the
+    # word-vocab token-ID space that the rest of BEAVER uses.
+    _w.tag_to_word = np.array(
+        [_w.tokenizer.w_idx.get(tag, 0) for tag in _w.tokenizer.idx_t],
+        dtype=np.int64,
+    )
+    # Cache full-sequence logits keyed by prompt token-ID tuple so that the
+    # model is only run once per instance regardless of how many frontier
+    # expansions that instance triggers.
+    _w._logit_cache = {}
 
     # Re-register the constraint so _REGISTRY is populated in this worker process.
     # With spawn start method, workers start fresh and don't inherit the main
@@ -90,29 +105,28 @@ def init_worker_state(config_dict):
 
 
 def build_prompt(instance, continuation):
-    """Build the final prompt string sent to the model as input
+    """Build the token-ID list sent to the model.
 
     Args:
-        instance: Dict with at least ``prompt`` (list of String). May also contain
-            ``system_prompt`` and ``fewshot_messages`` (per-instance overrides).
-        continuation: List of token IDs generated so far (the partial sequence
-            being extended).
+        instance: Dict with at least ``prompt`` (list of str tokens).
+        continuation: List of token IDs generated so far.
 
     Returns:
-        A torch.Tensor containing the word embeddings of the prompt
+        List[int] of token IDs (prompt + continuation).
     """
     if _w.verbose:
         print("[DEBUG] Tokenizing prompt into ids...")
 
-    prompt_token_ids = _w.tokenizer.tokenize(instance["prompt"]) # after this will be in the form of a list of indices
-    
+    # tokenize() expects a batch (list of sentences); wrap in outer list,
+    # then take row 0 to get a flat list of token IDs.
+    prompt_token_ids = _w.tokenizer.tokenize([instance["prompt"]])[0].tolist()
+
     if _w.verbose:
         print("[DEBUG] Embedding prompt...")
-    
+
     if _w.glove_embed:
         if continuation:
             return embed(prompt_token_ids + continuation)
-
         return embed(prompt_token_ids)
     else:
         if continuation:
@@ -125,49 +139,85 @@ def build_prompt(instance, continuation):
 # ---------------------------------------------------------------------------
 
 def model_generate_next_token_logprobs(instance, continuation):
-    """Get next-token logprobs from vLLM server using OpenAI-compatible API.
+    """Get next-token logprobs from the local TransformerProgram model.
+
+    The TPM is non-autoregressive: one forward pass on the prompt produces
+    logits at every output position simultaneously.  We cache that result and
+    index position k = len(continuation) for the k-th generation step, so the
+    model is only ever run once per instance.
+
+    The model outputs over d_vocab_out tag-vocab classes.  We remap those
+    indices to the word-vocab indices BEAVER uses throughout via _w.tag_to_word.
 
     Args:
-        instance: Instance dict (must have ``prompt``; may have
-            ``system_prompt``, ``fewshot_messages``).
-        continuation: List of token IDs generated so far.
+        instance: Instance dict with ``prompt`` as a list of str tokens
+                  (already normalised with BOS/EOS by _prepare_dataset).
+        continuation: List of word-vocab token IDs generated so far.
 
     Returns:
-        (np.ndarray, str): ``(logprobs_array, prompt)`` where logprobs_array
-        has shape [N, 2] with [token_id, logprob] pairs, and prompt is the
-        final string sent to the server.
+        (np.ndarray, list): logprobs_array of shape [word_vocab_size, 2] with
+        columns [word_token_id, logprob], and the prompt token-ID list.
     """
     try:
-        # --- encode prompt into tokens ---------------------------------------------
-        prompt = build_prompt(instance, continuation)
-
-        # FIXME: right now this is a list of vectors, aka word embeddings
-        if _w.verbose:
-            print("[DEBUG] Prompt built successfully")
-            print(f"prompt: {prompt}")
-
-        # forward pass
-        model = _w.model_name
+        # Convert instance into a prompt made of token ids
+        prompt_token_ids = build_prompt(instance = instance, continuation = None)
 
         if _w.verbose:
-            print("[DEBUG] Running the forward pass...")
-        logits = model.forward(prompt)
+            print(f"[DEBUG] Prompt token IDs: {prompt_token_ids}")
 
-        logprobs = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float)
+        # ── Run model once per prompt; cache all position logits ──────────
+        prompt_key = tuple(prompt_token_ids)
+        if prompt_key not in _w._logit_cache:
+            if _w.verbose:
+                print("[DEBUG] Cache miss — running forward pass...")
+            model = _w.model_name
+            x = torch.tensor(prompt_token_ids, dtype=torch.long).unsqueeze(0)
+            seq_len = x.shape[1]
+            # Full (non-causal) attention: each output position must see all
+            # input positions simultaneously for the RASP sort algorithm to
+            # compute element ranks correctly.
+            mask = torch.ones(seq_len, seq_len, dtype=torch.bool).unsqueeze(0)
+            with torch.no_grad():
+                logits = model(x.to(model.device), mask=mask.to(model.device))
+            # Store [seq_len, d_vocab_out] on CPU; drop the batch dim.
+            _w._logit_cache[prompt_key] = logits[0].cpu()
+
+        all_logits = _w._logit_cache[prompt_key]  # [seq_len, d_vocab_out]
+
+        # Find the correct logits to return, range of 1 to seq_len-2 because of BOS and EOS tokens
+        k = len(continuation)
+        output_pos = k + 1
+        max_output_pos = all_logits.shape[0] - 1  # exclude trailing </s> position
+
+        word_vocab_size = len(_w.tokenizer.idx_w)
+        log_probs_remapped = np.full(word_vocab_size, -1e9, dtype=np.float64)
+
+        if output_pos < max_output_pos:
+            logits_k = all_logits[output_pos]  # [d_vocab_out]
+            tag_log_probs = (
+                torch.nn.functional.log_softmax(logits_k.float(), dim=-1)
+                .numpy()
+            )
+            # Scatter tag-vocab log-probs into the word-vocab slots.
+            for tag_idx, word_idx in enumerate(_w.tag_to_word):
+                log_probs_remapped[word_idx] = tag_log_probs[tag_idx]
+        else:
+            # Beyond the model's output length: signal end-of-sequence via </s>.
+            # Has to happen because a TPM does not have EOS in its vocab, and is non-autoregressive
+            eos_id = _w.tokenizer.w_idx.get("</s>", 1)
+            log_probs_remapped[eos_id] = 0.0
+
         if _w.verbose:
-            print(f"[DEBUG] Received logprobs: {logprobs}")
+            print(f"[DEBUG] Generation step k={k}, output_pos={output_pos}")
 
-        logprobs_w_ids = []
-        for logprob in logprobs.items():
-            token_id = i
-            logprobs_w_ids.append([token_id, logprob])
-            i += 1
+        logprobs_w_ids = np.column_stack([
+            np.arange(word_vocab_size, dtype=np.float64),
+            log_probs_remapped,
+        ])
 
-        # prompt used to be an array of ids of words, changed now, so have to figure that out
-        return np.array(logprobs), prompt
+        return logprobs_w_ids, prompt_token_ids
 
     except Exception as e:
-        # FIXME: Likely would want some more robust error handling here
         print(f"[ERROR] An error occurred when attempting to compute the next token log probabilities, {e}")
 
 # ---------------------------------------------------------------------------
