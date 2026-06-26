@@ -4,16 +4,15 @@ import json
 import sys
 from pathlib import Path
 from typing import Callable
+import torch
 
 import numpy as np
 
-from beaver.utils import new_log_dir
+from beaver.utils.utils import new_log_dir
 from beaver.logging import get_log_data, summarize_log_data, summarize_profile_data
 from beaver.verifiers.frontier_verifier import FrontierVerifier
-from beaver.verifiers.sampling_verifier import SamplingVerifier
 from beaver.constraints.base_constraints import register_constraint
 from beaver.utils.tokenizer_utils import normalize_sent
-
 
 
 def _default_check_call_fn(_inst, seqs, _toks):
@@ -51,6 +50,8 @@ def run(
     cache_dataset_name: str | None = None,
     instance_context_fn: Callable | None = None,
     model: str,
+    model_type: str,
+    model_args: str,
     # Experiment params
     verifier: str = "frontier",
     gen_length: int = 32,
@@ -75,6 +76,7 @@ def run(
     # Output
     log_dir: str = "logging",
     verbose: bool = False,
+    gpu_uuid: str | None = None,
 ) -> list[dict]:
     """Run BEAVER verification on a model.
 
@@ -131,12 +133,10 @@ def run(
 
     fewshot_messages = fewshot_messages or []
 
-
     # ── Prepare dataset and register constraint ────────────────────────────
     # ds is now an list of dictionaries where "prompt" in each dictionary is a list of word tokens with SOS and EOS tokens
     # UNK and PAD is handled by the tokenizer function which converts it into ids
     ds = _prepare_dataset_from_prompts(prompts)
-
 
     if cache_dataset_name is None:
         effective_dataset_name = "custom"
@@ -157,6 +157,8 @@ def run(
         dataset_name=effective_dataset_name,
         use_cache=cache,
         model=model,
+        model_type=model_type,
+        model_args=model_args,
         verifier=verifier,
         gen_length=gen_length,
         temperature=temperature,
@@ -221,6 +223,8 @@ def _run_inner(
     dataset_name,
     use_cache,
     model,
+    model_type,
+    model_args,
     verifier,
     gen_length,
     temperature,
@@ -252,6 +256,8 @@ def _run_inner(
     try:
         run_args = dict(
             model=model,
+            model_type=model_type,
+            model_args=model_args,
             dataset=dataset_name,
             verifier=verifier,
             gen_length=gen_length,
@@ -291,22 +297,21 @@ def _run_inner(
             chat_mode=use_chat_template,
             system_message=system_message,
             fewshot_messages=fewshot_messages,
-            use_grammar=use_grammar,
             use_cache=use_cache,
+            glove_embed=glove_embed,
+            model_type=model_type,
+            model_args=model_args,
         )
 
         if verifier == "frontier":
             llm = FrontierVerifier(
                 model,
                 dataset_name,
+                prompts = dataset,
                 max_frontier_size=max_frontier_size,
                 max_frontier_prob=max_frontier_prob,
                 frontier_scoring_strategy=frontier_scoring_strategy,
                 **common_kwargs,
-            )
-        elif verifier == "sampling":
-            llm = SamplingVerifier(
-                model, dataset_name, **common_kwargs
             )
         else:
             raise ValueError(
