@@ -1,5 +1,6 @@
 from collections import Counter
 from nltk.tokenize import word_tokenize
+import nltk
 from llguidance import TokenizerWrapper, LLTokenizer
 import numpy as np
 
@@ -28,9 +29,11 @@ class NLTK_Tokenizer:
         """
 
         # initialize tokenizer
-        idx_w, w_idx = self.get_tokenizer(train)
+        idx_w, w_idx, idx_t, t_idx = self.get_tokenizer(train)
         self.idx_w = idx_w
         self.w_idx = w_idx
+        self.t_idx = t_idx
+        self.idx_t = idx_t
 
         return
 
@@ -59,8 +62,14 @@ class NLTK_Tokenizer:
             words += sorted(c for c in counts.keys() if c not in words)
         idx_w = np.array(words)
         w_idx = {w: i for i, w in enumerate(idx_w)}
+        tags = []
+        for t in [PAD] + ([UNK] if unk else []):
+            tags.append(t)
+        tags += sorted(set(t for row in train for t in row["tags"] if t not in tags))
+        idx_t = np.array(tags)
+        t_idx = {t: i for i, t in enumerate(idx_t)}
 
-        return idx_w, w_idx
+        return idx_w, w_idx, idx_t, t_idx
 
     def tokenize(self, sents, max_len=None):
         """
@@ -82,8 +91,19 @@ class NLTK_Tokenizer:
             out.append(t)
         return np.stack(out, 0)
 
-    def decode(self, idxs):
+    @property
+    def eos_token_id(self):
+        return self.w_idx.get(EOS, None)
+
+    @property
+    def pad_token_id(self):
+        return self.w_idx.get(PAD, None)
+
+    def decode(self, idxs, skip_special_tokens=False):
         out = [self.idx_w[idx] for idx in idxs]
+        if skip_special_tokens:
+            special = {PAD, BOS, EOS, SEP, UNK}
+            out = [t for t in out if t not in special]
         return out
     
 
@@ -96,7 +116,12 @@ def normalize_sent(sent):
     Output:
         - a list containing the separated normalized sentence
     """
-    return ["<s>"] + word_tokenize(sent) + ["</s>"]
+    # nltk.download('punkt_tab')
+
+    # FIXME: input was actually already tokenized by the TPM code, are we keeping that?
+    # return ["<s>"] + word_tokenize(sent) + ["</s>"]
+
+    return ["<s>"] + sent + ["</s>"]
 
 def initialize_llguidance(w_idx, idx_w):
     """
