@@ -112,18 +112,16 @@ def summarize_log_data(
     all_data, run_logs_folder: Path, use_median: bool = False, threshold: float = 0.9
 ):
     num_instances = len(all_data)
-    # Filter to only transition entries
-    entries = [
-        [e for e in entries if "transition" in e] for entries in all_data.values()
-    ]
-    entries_with_data = [e for e in entries if len(e) > 0]
-    num_no_data = num_instances - len(entries_with_data)
-    num_with_data = len(entries_with_data)
 
-    final_entries = [entry_list[-1] for entry_list in entries_with_data if entry_list]
+    entries_per_instance = list(all_data.values())  # List[List[dict]]
+
+    final_entries = [entry_list[-1] for entry_list in entries_per_instance if entry_list]
+
+    num_no_data = num_instances - len(final_entries)
+    num_with_data = len(final_entries)
 
     # Collect final values for each instance
-    transitions = [e["transition"] for e in final_entries]
+    transitions = [e.get("transition", -1) for e in final_entries]
     final_ub = [e.get("upper_bound", 1.0) for e in final_entries]
     final_lb = [e.get("lower_bound", 0.0) for e in final_entries]
     final_ub_minus_lb = [ub - lb for ub, lb in zip(final_ub, final_lb)]
