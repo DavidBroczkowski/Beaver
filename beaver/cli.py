@@ -139,7 +139,7 @@ def _run_cmd(argv):
 
     # Experiment param overrides (any key from experiment.yaml can be overridden)
     parser.add_argument(
-        "--verifier", type=str, default=None, choices=["frontier", "sampling"]
+        "--verifier", type=str, default=None, choices=["frontier", "sampling", "logits"]
     )
     parser.add_argument("--gen_length", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=None)
