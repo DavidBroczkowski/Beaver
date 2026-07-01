@@ -16,9 +16,11 @@ from beaver.utils.glove_emb_utils import (
 
 from beaver.verifiers.base_verifier import BaseVerifier
 from beaver.verifiers.frontier import Frontier, FrontierElement
+from beaver.utils.transformers import Transformer
 from beaver.verifiers.worker_common import (
     _w,
     apply_top_p_top_k,
+    apply_top_p_top_k_tpm,
     get_grammar_mask,
     init_worker_state,
     log_profiling,
@@ -26,6 +28,18 @@ from beaver.verifiers.worker_common import (
     safe_worker,
     worker_setup,
 )
+from beaver.utils.programs import (
+    TransformerProgramModel,
+    softmax, softmax_no_temp, gumbel_hard, gumbel_soft, argmax,
+)
+
+_SAMPLE_FN_MAP = {
+    "softmax": softmax,
+    "softmax_no_temp": softmax_no_temp,
+    "gumbel_hard": gumbel_hard,
+    "gumbel_soft": gumbel_soft,
+    "argmax": argmax,
+}
 
 
 @safe_worker
@@ -113,9 +127,8 @@ def _worker_process_instance(args):
 
         presemantic_check_time = time.time()
 
-        # Semantic checking -- these are the important lines!
+        # Semantic checking
         semantic_check_mask = np.logical_or(
-            # aka check_call_fn
             check_semantic_call(
                 _w.dataset_name, instance, decoded_sequences, token_lists
             ),
@@ -126,7 +139,6 @@ def _worker_process_instance(args):
         semantic_correct_indices = np.array([], dtype=np.intp)
         if len(semantic_check_indices) > 0:
             sequences_to_check = decoded_sequences[semantic_check_indices]
-            # aka check_fn!
             semantic_correctness_mask = enforce_semantic_constraint(
                 _w.dataset_name, instance, sequences_to_check, use_cache=_w.use_cache
             )
@@ -348,7 +360,6 @@ def _worker_process_instance(args):
         "instance_run_time": instance_end_time - instance_start_time,
     }
 
-
 class FrontierVerifier(BaseVerifier):
     def __init__(self, model, dataset, prompts, **kwargs):
         super().__init__(model, dataset, prompts, **kwargs)
@@ -357,6 +368,56 @@ class FrontierVerifier(BaseVerifier):
         self.frontier_scoring_strategy = kwargs.get(
             "frontier_scoring_strategy", "highest-prob"
         )
+
+        model = self.model_name
+        # load model
+        with open(kwargs["model_args"], 'r') as args_file:
+            model_args_dict = json.load(args_file)
+
+        state_dict = torch.load(model, weights_only=False)
+
+        if kwargs["model_type"] == "program":
+            # 'max_length' is the training-time name for the sequence-length param;
+            # TransformerProgramModel calls it 'n_ctx'.
+            if 'n_ctx' not in model_args_dict:
+                if 'max_length' in model_args_dict:
+                    model_args_dict['n_ctx'] = model_args_dict['max_length']
+                elif 'pos_embed.W' in state_dict:
+                    model_args_dict['n_ctx'] = state_dict['pos_embed.W'].shape[0]
+            # Infer d_vocab_out from the checkpoint's unembed weight; the output
+            # vocabulary (tags) is often smaller than the input vocabulary.
+            if 'd_vocab_out' not in model_args_dict and 'unembed.W_U' in state_dict:
+                model_args_dict['d_vocab_out'] = state_dict['unembed.W_U'].shape[1]
+            # args.json stores sample_fn as a string name; resolve to the actual
+            # callable.  Use argmax at inference for deterministic discrete behaviour.
+            if isinstance(model_args_dict.get('sample_fn'), str):
+                model_args_dict['sample_fn'] = _SAMPLE_FN_MAP.get(
+                    model_args_dict['sample_fn'], argmax
+                )
+            loaded_model = TransformerProgramModel(
+                d_vocab=len(self.tokenizer.idx_w),
+                idx_t=self.tokenizer.idx_t,
+                **model_args_dict,
+            )
+        elif kwargs["model_type"] == "transformer":
+            if 'n_ctx' not in model_args_dict and 'max_length' in model_args_dict:
+                model_args_dict['n_ctx'] = model_args_dict['max_length']
+            if 'd_vocab_out' not in model_args_dict and 'unembed.W_U' in state_dict:
+                model_args_dict['d_vocab_out'] = state_dict['unembed.W_U'].shape[1]
+            loaded_model = Transformer(
+                d_vocab=model_args_dict['vocab_size'],
+                idx_t=self.tokenizer.idx_t,
+                **model_args_dict
+            )
+        else:
+            raise ValueError(
+                f"model_type must be \"program\" or \"transformer\", got {kwargs['model_type']!r}"
+            )
+
+        loaded_model.load_state_dict(state_dict)
+        loaded_model.eval()
+
+        self.model_name = loaded_model
 
     def __call__(self, dataset, run_log_dir):
         config = self._build_worker_config()
