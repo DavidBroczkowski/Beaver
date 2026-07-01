@@ -69,48 +69,7 @@ class BaseVerifier(ABC):
         self.tokenizer = NLTK_Tokenizer(prompts)
         self.semantic_symbol = semantic_symbol
 
-        # load model
-        with open(kwargs["model_args"], 'r') as args_file:
-            model_args_dict = json.load(args_file)
-
-        state_dict = torch.load(model, weights_only=False)
-
-        if kwargs["model_type"] == "program":
-            # 'max_length' is the training-time name for the sequence-length param;
-            # TransformerProgramModel calls it 'n_ctx'.
-            if 'n_ctx' not in model_args_dict:
-                if 'max_length' in model_args_dict:
-                    model_args_dict['n_ctx'] = model_args_dict['max_length']
-                elif 'pos_embed.W' in state_dict:
-                    model_args_dict['n_ctx'] = state_dict['pos_embed.W'].shape[0]
-            # Infer d_vocab_out from the checkpoint's unembed weight; the output
-            # vocabulary (tags) is often smaller than the input vocabulary.
-            if 'd_vocab_out' not in model_args_dict and 'unembed.W_U' in state_dict:
-                model_args_dict['d_vocab_out'] = state_dict['unembed.W_U'].shape[1]
-            # args.json stores sample_fn as a string name; resolve to the actual
-            # callable.  Use argmax at inference for deterministic discrete behaviour.
-            if isinstance(model_args_dict.get('sample_fn'), str):
-                model_args_dict['sample_fn'] = _SAMPLE_FN_MAP.get(
-                    model_args_dict['sample_fn'], argmax
-                )
-            loaded_model = TransformerProgramModel(
-                d_vocab=len(self.tokenizer.idx_w),
-                idx_t=self.tokenizer.idx_t,
-                **model_args_dict,
-            )
-        elif kwargs["model_type"] == "transformer":
-            if 'n_ctx' not in model_args_dict and 'max_length' in model_args_dict:
-                model_args_dict['n_ctx'] = model_args_dict['max_length']
-            loaded_model = Transformer(d_vocab=len(self.tokenizer.idx_w), **model_args_dict)
-        else:
-            raise ValueError(
-                f"model_type must be \"program\" or \"transformer\", got {kwargs['model_type']!r}"
-            )
-
-        loaded_model.load_state_dict(state_dict)
-        loaded_model.eval()
-
-        self.model_name = loaded_model
+        self.model_name = model
 
         # Common generation parameters (previously duplicated in subclasses)
         self.temperature = kwargs.get("temperature", 1.0)
