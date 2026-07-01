@@ -68,9 +68,12 @@ class Transformer(nn.Module):
         init_emb=None,
         unembed_mask=None,
         pool_outputs=False,
+        idx_t = None,
         **kwargs,
     ):
-        unembed_mask=None
+        # ensures that UNK or PAD is not chose when unembedding
+        if unembed_mask:
+            unembed_mask = np.array([t in ("<unk>", "<pad>") for t in idx_t])
 
         super().__init__()
         self.embed = Embed(d_vocab, d_model, init_emb=init_emb)
