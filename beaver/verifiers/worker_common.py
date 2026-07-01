@@ -137,6 +137,63 @@ def build_prompt(instance, continuation):
 # ---------------------------------------------------------------------------
 # model_generate — get logprobs from model
 # ---------------------------------------------------------------------------
+def model_generate_logprobs_transformer(instance, continuation):
+    """Get next-token logprobs from the local Transformer model.
+
+    The model outputs over d_vocab_out tag-vocab classes.  We remap those
+    indices to the word-vocab indices BEAVER uses throughout via _w.tag_to_word.
+
+    Args:
+        instance: Instance dict with ``prompt`` as a list of str tokens
+                  (already normalised with BOS/EOS by _prepare_dataset).
+        continuation: List of word-vocab token IDs generated so far.
+
+    Returns:
+        (np.ndarray, list): logprobs_array of shape [word_vocab_size, 2] with
+        columns [word_token_id, logprob], and the prompt token-ID list.
+    """
+    seq_len = x.shape[1]
+
+    # Convert instance into a prompt made of token ids
+    prompt_token_ids = build_prompt(instance = instance, continuation = continuation)
+
+    if _w.verbose:
+            print(f"[DEBUG] Prompt token IDs: {prompt_token_ids}")
+    
+    prompt_key = tuple(prompt_token_ids)
+
+    if _w.verbose:
+        print("[DEBUG] Cache miss — running forward pass...")
+
+    # get model
+    model = _w.model_name
+
+    # convert to tensor
+    x = torch.tensor(prompt_token_ids, dtype=torch.long).unsqueeze(0)
+
+    # run on model
+    mask = torch.ones(seq_len, dtype=torch.bool).unsqueeze(0)
+    with torch.no_grad():
+        logits = model(x.to(model.device), mask=mask.to(model.device))
+
+    tag_log_probs = torch.nn.functional.log_softmax(logits.float(), dim=-1)
+
+    # create vector for the indexes and then combine with the logits
+    word_vocab_size = len(_w.tokenizer.idx_w)
+    log_probs_remapped = np.full(word_vocab_size, -1e9, dtype=np.float64)
+
+    # map tag indices to word indices 
+    for tag_idx, word_idx in enumerate(_w.tag_to_word):
+        log_probs_remapped[word_idx] = tag_log_probs[tag_idx]
+    
+    # combine word indices and log probs
+    logprobs_w_ids = np.column_stack([
+        np.arange(word_vocab_size, dtype=np.float64),
+        log_probs_remapped,
+    ])
+
+    return logprobs_w_ids, prompt_token_ids
+
 
 def model_generate_next_token_logprobs(instance, continuation):
     """Get next-token logprobs from the local TransformerProgram model.
@@ -220,6 +277,73 @@ def model_generate_next_token_logprobs(instance, continuation):
     except Exception as e:
         print(f"[ERROR] An error occurred when attempting to compute the next token log probabilities, {e}")
 
+def model_generate_logprobs(instance):
+    """Get next-token logprobs from the local TransformerProgram model.
+
+    The TPM is non-autoregressive: one forward pass on the prompt produces
+    logits at every output position simultaneously. We return all logits here
+    as log probabilities.
+
+    The model outputs over d_vocab_out tag-vocab classes.  We remap those
+    indices to the word-vocab indices BEAVER uses throughout via _w.tag_to_word.
+
+    Args:
+        instance: Instance dict with ``prompt`` as a list of str tokens
+                  (already normalised with BOS/EOS by _prepare_dataset).
+
+    Returns:
+        (np.ndarray, list): logprobs_array of shape [word_vocab_size, 2] with
+        columns [word_token_id, logprob], and the prompt token-ID list.
+    """
+    try:
+        # Convert instance into a prompt made of token ids
+        prompt_token_ids = build_prompt(instance = instance, continuation = None)
+
+        if _w.verbose:
+            print(f"[DEBUG] Prompt token IDs: {prompt_token_ids}")
+
+        # ── Run model once per prompt; cache all position logits ──────────
+        prompt_key = tuple(prompt_token_ids)
+        
+        if _w.verbose:
+            print("[DEBUG] Cache miss — running forward pass...")
+        if prompt_key not in _w._logit_cache:
+            model = _w.model_name
+            x = torch.tensor(prompt_token_ids, dtype=torch.long).unsqueeze(0)
+            seq_len = x.shape[1]
+            # Full (non-causal) attention: each output position must see all
+            # input positions simultaneously for the RASP sort algorithm to
+            # compute element ranks correctly.
+            mask = torch.ones(seq_len, seq_len, dtype=torch.bool).unsqueeze(0)
+            with torch.no_grad():
+                logits = model(x.to(model.device), mask=mask.to(model.device))
+            # Store [seq_len, d_vocab_out] on CPU; drop the batch dim.
+            _w._logit_cache[prompt_key] = logits[0].cpu()
+
+        output_logits = _w._logit_cache[prompt_key][1:-1] # [N-2, d_vocab_out]
+
+        # create a mask?
+        N_out, V = output_logits.shape
+
+        log_probs_remapped = np.full((N_out, V), -1e9, dtype=np.float64) # holds our probs
+        tag_log_probs = torch.nn.functional.log_softmax(output_logits, dim=-1).numpy() # softmax logits
+
+        # create a NumPy array for the token ids
+        token_ids = np.broadcast_to(np.arange(V, dtype=np.float64), (N_out, V))  # [N-2, V]
+
+        # convert tag index to word index
+        log_probs_remapped = np.full(
+            (N_out, V), -1e9, dtype=np.float64
+        )  # [N-2, V]
+        log_probs_remapped[:, _w.tag_to_word] = tag_log_probs
+
+        model_logprobs = np.stack([token_ids, log_probs_remapped], axis=-1)       # [N-2, V, 2]
+
+        return model_logprobs, prompt_token_ids
+
+    except Exception as e:
+        print(f"[ERROR] An error occurred when attempting to compute the next token log probabilities, {e}")
+        
 # ---------------------------------------------------------------------------
 # worker_setup — shared boilerplate at the start of _worker_process_instance
 # ---------------------------------------------------------------------------
@@ -299,6 +423,62 @@ def apply_top_p_top_k(log_probs):
         print("[DEBUG] Pruning complete")
     return sorted_lp, culled_prob_sum
 
+def apply_top_p_top_k_tpm(log_probs):
+    """Apply top-p and top-k pruning, removing filtered token entries.
+       For use with Transformer Program Model logits
+
+    Args:
+        log_probs: np.array of shape [N, V, 2] with columns [token_id, logprob],
+                   assumed sorted by logprob descending, where N is the sequence length 
+                   of the prompt
+    Returns:
+        (filtered_log_probs, culled_prob_sum) where filtered_log_probs has the
+        same [N, V, 2] shape with pruned tokens set to -1e9.
+    """
+    if _w.verbose:
+        print("[DEBUG] Applying top_p and top_k pruning for a TPM...")
+
+    if _w.top_p >= 1.0 and _w.top_k < 0:
+        return log_probs, 0.0
+
+    # Sort by logprob descending (in case input isn't sorted)
+    order = np.argsort(log_probs[:, :, 1], axis=1)[:, ::-1]          # [N, V]
+    sorted_lp = np.take_along_axis(log_probs, order[:, :, np.newaxis], axis=1)  # [N, V, 2]
+
+    keep = sorted_lp.shape[1]  # V — number of vocab entries per position
+    culled_prob_sum = np.zeros(sorted_lp.shape[0], dtype=np.float64)  # [N]
+
+    # Top-k: keep only the k highest-logprob entries per position
+    if _w.top_k > 0 and keep > _w.top_k:
+        culled_prob_sum += np.exp(sorted_lp[:, _w.top_k:, 1]).sum(axis=1)
+
+        indices = np.arange(sorted_lp.shape[1])[np.newaxis, :]  # [1, V]
+        cull_mask = indices >= _w.top_k                           # [1, V] broadcasts to [N, V]
+
+        sorted_lp[:, :, 1] = np.where(cull_mask, -1e9, sorted_lp[:, :, 1])
+        keep = _w.top_k
+
+    # Top-p: per position, keep smallest set whose cumulative prob >= top_p
+    if _w.top_p < 1.0:
+        probs = np.exp(sorted_lp[:, :, 1])           # [N, V]
+        cumsum = np.cumsum(probs, axis=1)             # [N, V]
+        # First index where cumsum reaches top_p, per position — gives [N]
+        cutoff = np.where(
+            np.any(cumsum >= _w.top_p, axis=1),
+            np.argmax(cumsum >= _w.top_p, axis=1) + 1,
+            keep,  # never reached threshold — keep everything
+        )
+
+        indices = np.arange(sorted_lp.shape[1])[np.newaxis, :]  # [1, V]
+        cull_mask = indices >= cutoff[:, np.newaxis]              # [N, V]
+
+        if np.any(cutoff < keep):
+            culled_prob_sum += (probs * cull_mask).sum(axis=1)
+            sorted_lp[:, :, 1] = np.where(cull_mask, -1e9, sorted_lp[:, :, 1])
+
+    if _w.verbose:
+        print("[DEBUG] Pruning complete")
+    return sorted_lp, culled_prob_sum
 
 def logprobs_dict_to_tensor(logprobs_dict, vocab_size=None):
     """Convert logprobs dict to tensor for existing code compatibility.
