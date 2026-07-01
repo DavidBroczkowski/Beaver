@@ -20,13 +20,14 @@ def load_input_rows():
         data = json.load(file)
         return data
 
-def load_prompts(**kwargs) -> list[dict]:
+def load_prompts(start_idx: int = 0, end_idx: int = -1, **kwargs) -> list[dict]:
     data = load_input_rows()
     inputs = data["inputs"]
     tags = data["tags"]
 
     instances = []
-    for i in range(len(inputs)):
+    end = end_idx if end_idx != -1 else len(inputs)
+    for i in range(start_idx, end):
         instances.append(
             {
                 "prompt": inputs[i],
@@ -39,9 +40,7 @@ def load_prompts(**kwargs) -> list[dict]:
 
 def constraint_fn(instance: dict, sequence: str) -> bool:
     """True = acceptable, False = violation."""
-    seq_list = sorted(int(x) for x in sequence.split())
-    in_list = sorted(int(x) for x in instance["inputs"])
-    return seq_list == in_list
+    return sequence.split() == instance["tags"]
 
 def check_call_fn(instance, decoded_sequences, token_lists):
     """Don't check incomplete prefixes — let complete_flag trigger the check at EOS."""
