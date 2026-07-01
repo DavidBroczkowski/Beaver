@@ -11,6 +11,7 @@ import numpy as np
 from beaver.utils.utils import new_log_dir
 from beaver.logging import get_log_data, summarize_log_data, summarize_profile_data
 from beaver.verifiers.frontier_verifier import FrontierVerifier
+from beaver.verifiers.logits_verifier import LogitsVerifier
 from beaver.constraints.base_constraints import register_constraint
 from beaver.utils.tokenizer_utils import normalize_sent
 
@@ -313,10 +314,18 @@ def _run_inner(
                 frontier_scoring_strategy=frontier_scoring_strategy,
                 **common_kwargs,
             )
+        elif verifier == "logits":
+            llm = LogitsVerifier(
+                model,
+                dataset_name,
+                prompts = dataset,
+                **common_kwargs,
+            )
         else:
             raise ValueError(
                 f"Unknown verifier: '{verifier}'. Choose 'frontier' or 'sampling'."
             )
+        
 
         results = llm(dataset, log_dir)
 
@@ -324,7 +333,7 @@ def _run_inner(
         print(f"\n[beaver] Results: {len(results)}")
         print(f"\n[beaver] Run logs: {log_dir}")
         ## Save bound results in CSV
-        bounds = sorted([(r["idx"], r["lower_bound"], r["upper_bound"], r["transition"]) for r in results], key=lambda x: x[0])
+        bounds = sorted([(r["idx"], r["lower_bound"], r["upper_bound"], r.get("transition", "N/A")) for r in results], key=lambda x: x[0])
         with open(log_dir / "bounds.csv", "w") as f:
             f.write("idx,lower_bound,upper_bound,num_transitions\n")
             for idx, lower, upper, num_transitions in bounds:
